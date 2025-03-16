@@ -1,41 +1,16 @@
-# CatchMe
+# app
 
-A modern download manager with browser integration.
+A new Flutter project.
 
-## Features
-- Multi-threaded downloads with chunk support
-- Real-time progress tracking
-- Download pause/resume
-- Browser integration (coming soon)
-- Dark theme UI
+## Getting Started
 
-## Project Structure
-- `app/` - Flutter application with Material 3 design
-- `server/` - Go-based download manager service
-- `extensions/` - Browser extensions (coming soon)
+This project is a starting point for a Flutter application.
 
-## Development
+A few resources to get you started if this is your first Flutter project:
 
-### Prerequisites
-- Flutter 3.x
-- Go 1.21+
-- CMake (for Linux build)
+- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
+- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
 
-### Quick Start
-```bash
-# Start both server and UI
-./dev.sh
-```
-
-### Manual Setup
-1. Start the server:
-```bash
-cd server
-go run main.go
-```
-
-2. Start the Flutter app:
-```bash
-cd app
-flutter run -d linux  # or windows/macos
-```
+For help getting started with Flutter development, view the
+[online documentation](https://docs.flutter.dev/), which offers tutorials,
+samples, guidance on mobile development, and a full API reference.
