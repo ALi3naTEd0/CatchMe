@@ -21,16 +21,8 @@ class ServerLauncher {
     final timestamp = DateTime.now().toIso8601String();
     final logMessage = '[$timestamp] $message\n';
     
-    // Asegurar que el directorio logs existe
     await Directory('logs').create(recursive: true);
-    
-    // Escribir al archivo
-    await _logFile.writeAsString(
-      logMessage,
-      mode: FileMode.append,
-    );
-    
-    // También imprimir a consola
+    await _logFile.writeAsString(logMessage, mode: FileMode.append);
     print(logMessage);
   }
 
@@ -40,7 +32,7 @@ class ServerLauncher {
     try {
       await _log('=== Iniciando servidor Go ===');
       
-      // Limpiar puerto 8080
+      // Verificar puerto en uso
       try {
         final result = await Process.run('lsof', ['-t', '-i:8080']);
         if (result.stdout.toString().isNotEmpty) {
@@ -52,14 +44,12 @@ class ServerLauncher {
       } catch (e) {
         await _log('Warning: No se pudo liberar el puerto 8080');
       }
-      
-      final serverDir = Directory('server');  // Cambio aquí: buscar en la raíz
+
+      final serverDir = Directory('server');
       if (!serverDir.existsSync()) {
-        throw Exception('Directorio server/ no encontrado en: ${serverDir.absolute.path}');
+        throw Exception('Server directory not found: ${serverDir.absolute.path}');
       }
 
-      await _log('Iniciando servidor desde: ${serverDir.absolute.path}');
-      
       _serverProcess = await Process.start(
         'go',
         ['run', 'main.go'],
@@ -67,48 +57,34 @@ class ServerLauncher {
       );
 
       await _log('=== Servidor Go iniciado con PID: ${_serverProcess?.pid} ===');
-      
-      // Esperar a que el servidor esté listo
-      final completer = Completer<bool>();
-      
-      // Manejar stdout y stderr juntos ya que Go puede usar cualquiera para logs
-      Future.wait([
-        _serverProcess!.stdout.transform(utf8.decoder).forEach((data) async {
-          await _log('Server stdout: $data');
-          if (data.contains('Starting server on :8080')) {
-            if (!completer.isCompleted) {
-              completer.complete(true);
-              _statusController.add(true);
-            }
-          }
-        }),
-        _serverProcess!.stderr.transform(utf8.decoder).forEach((data) async {
-          await _log('Server stderr: $data');
-          if (data.contains('Starting server on :8080')) {
-            if (!completer.isCompleted) {
-              completer.complete(true);
-              _statusController.add(true);
-            }
-          }
-        })
-      ]);
 
-      // Esperar la inicialización con timeout
-      await completer.future.timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => throw Exception('Servidor no respondió en 5 segundos'),
-      );
+      // Monitorear salida del servidor y actualizar status
+      _serverProcess!.stdout.transform(utf8.decoder).listen((data) async {
+        await _log('Server stdout: $data');
+        if (data.contains('Starting server on :8080')) {
+          _statusController.add(true);  // Servidor iniciado
+        }
+      });
+
+      _serverProcess!.stderr.transform(utf8.decoder).listen((data) async {
+        await _log('Server stderr: $data');
+        if (data.contains('Starting server on :8080')) {
+          _statusController.add(true);  // Servidor iniciado
+        }
+      });
+
+      // Monitorear si el proceso termina
+      _serverProcess!.exitCode.then((code) {
+        _log('Server exited with code $code');
+        _statusController.add(false);  // Servidor detenido
+        _serverProcess = null;
+      });
 
     } catch (e, stack) {
-      await _log('=== Error iniciando servidor: $e ===');
-      await _log('Stack trace: $stack');
+      await _log('Error iniciando servidor: $e\n$stack');
       _statusController.add(false);
-      rethrow;  // Para debug
+      rethrow;
     }
-  }
-
-  Future<String> _getServerPath() async {
-    return 'go'; // Simplemente retornamos 'go' ya que estamos usando 'go run'
   }
 
   Future<void> stopServer() async {
@@ -117,10 +93,7 @@ class ServerLauncher {
     try {
       await _log('=== Deteniendo servidor Go ===');
       
-      // Intentar detener el proceso gracefully primero
       _serverProcess?.kill(ProcessSignal.sigterm);
-      
-      // Esperar un momento y forzar el cierre si sigue vivo
       await Future.delayed(const Duration(seconds: 1));
       _serverProcess?.kill(ProcessSignal.sigkill);
       

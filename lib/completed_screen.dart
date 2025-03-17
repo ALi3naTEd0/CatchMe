@@ -80,25 +80,29 @@ class _CompletedScreenState extends State<CompletedScreen> {
   }
 
   void _openFileLocation(DownloadItem download) async {
-    final home = Platform.environment['HOME']!;
-    final path = '${home}/Downloads';
-    
     try {
+      final home = Platform.environment['HOME']!;
+      final path = '${home}/Downloads';
       print('Opening folder: $path');
+
       if (Platform.isLinux) {
-        // Usar xdg-open en segundo plano
-        await Process.start('xdg-open', [path], mode: ProcessStartMode.detached);
+        // Evitar bloquear la UI usando spawn
+        final result = await Process.run('xdg-open', [path]);
+        if (result.exitCode != 0) {
+          throw Exception(result.stderr);
+        }
       } else if (Platform.isWindows) {
-        await Process.start('explorer', [path], mode: ProcessStartMode.detached);
+        await Process.run('explorer.exe', [path]);
       } else if (Platform.isMacOS) {
-        await Process.start('open', [path], mode: ProcessStartMode.detached);
+        await Process.run('open', [path]);
       }
     } catch (e) {
       print('Error opening folder: $e');
-      // Mostrar error en UI
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error opening Downloads folder: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open Downloads folder')),
+        );
+      }
     }
   }
 

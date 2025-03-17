@@ -21,7 +21,7 @@ func handleDownload(conn *websocket.Conn, url string) {
 
     // Get file info
     resp, err := http.Head(url)
-    if err != nil {
+    if (err != nil) {
         log.Printf("Error getting file info: %v", err)
         return
     }
@@ -36,7 +36,7 @@ func handleDownload(conn *websocket.Conn, url string) {
         return
     }
 
-    // Save directly to ~/Downloads
+    // Save to Downloads
     savePath := filepath.Join(home, "Downloads", filename)
     resp, err = http.Get(url)
     if err != nil {
@@ -74,7 +74,7 @@ func handleDownload(conn *websocket.Conn, url string) {
 
         downloaded += int64(n)
 
-        // Send progress
+        // Send progress more frequently and log it
         progress := map[string]interface{}{
             "type":          "progress",
             "url":           url,
@@ -84,7 +84,10 @@ func handleDownload(conn *websocket.Conn, url string) {
             "speed":         float64(downloaded) / time.Since(startTime).Seconds(),
         }
         data, _ := json.Marshal(progress)
-        conn.WriteMessage(websocket.TextMessage, data)
+        log.Printf("Sending progress: %s", string(data))
+        if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+            log.Printf("Error sending progress: %v", err)
+        }
     }
 
     // Send completion
