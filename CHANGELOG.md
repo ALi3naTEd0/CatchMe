@@ -3,23 +3,25 @@
 ## [Unreleased]
 
 ### Added
-- Initial project structure
-- Flutter UI with Material 3 dark theme
-- Download manager service in Go
-- WebSocket connection between UI and server
-- Download progress tracking
+- Modern Material Design 3 interface with dark theme
+- Real-time download progress tracking
+- Enhanced download statistics (speed, ETA, average speed)
+- Live download logs with progress updates
+- SHA-256 file verification
 - Pause/Resume functionality
-- Multi-file download support
-- Connection status indicator
-- Development script (dev.sh)
+- Auto-retry mechanism for failed downloads
+- WebSocket-based communication between UI and server
+- Connection status indicators
+- Basic completed downloads view
 
 ### Technical
-- Implemented singleton pattern for download service
-- Added chunked download support in server
+- Implemented singleton pattern for services
 - Real-time progress updates via WebSocket
-- Proper process management in development script
+- Proper error handling and retry logic
+- Development environment setup
+- Server process management
 
 ### Infrastructure
-- Basic project documentation
-- Development environment setup
-- Build configurations for Linux
+- Project documentation (README, CHANGELOG, TODO)
+- Development script for easy startup
+- Build configurations for multi-platform support
