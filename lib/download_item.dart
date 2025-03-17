@@ -14,6 +14,8 @@ class DownloadItem {
   DownloadStatus status;
   String? error;
   final DateTime startTime;
+  String? checksum;  // Añadir campo para guardar el SHA
+  List<String> logs = [];  // Añadir logs de la descarga
 
   DownloadItem({
     required this.url,
@@ -68,5 +70,11 @@ class DownloadItem {
     final minutes = (duration.inMinutes % 60).toString().padLeft(2, '0');
     final secs = (duration.inSeconds % 60).toString().padLeft(2, '0');
     return '$hours:$minutes:$secs';
+  }
+
+  void addLog(String message) {
+    final timestamp = DateTime.now();
+    final time = '${timestamp.hour}:${timestamp.minute}:${timestamp.second}';
+    logs.add('[$time] $message');
   }
 }

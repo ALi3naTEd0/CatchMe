@@ -44,6 +44,11 @@ func NewManager() *Manager {
     }
 }
 
+const (
+    maxRetries = 3
+    retryDelay = 5 * time.Second
+)
+
 func (m *Manager) HandleDownload(conn *websocket.Conn, url string) {
     m.mu.Lock()
     download := &Download{
@@ -57,76 +62,97 @@ func (m *Manager) HandleDownload(conn *websocket.Conn, url string) {
     
     log.Printf("Starting download: %s", url)
 
-    // 1. Get file info
-    resp, err := http.Head(url)
-    if err != nil {
-        m.sendError(conn, url, fmt.Sprintf("Error getting file info: %v", err))
-        return
-    }
-    download.Size = resp.ContentLength
-    
-    // Send initial progress update
-    m.sendProgress(conn, download)
+    // Implementar reintentos a nivel servidor
+    var lastError error
+    for attempt := 0; attempt <= maxRetries; attempt++ {
+        if attempt > 0 {
+            m.sendLog(conn, url, fmt.Sprintf("Retry attempt %d/%d", attempt, maxRetries))
+            time.Sleep(retryDelay)
+        }
 
-    // 2. Start download
-    req, _ := http.NewRequest("GET", url, nil)
-    resp, err = http.DefaultClient.Do(req)
-    if err != nil {
-        m.sendError(conn, url, fmt.Sprintf("Error starting download: %v", err))
-        return
-    }
-    defer resp.Body.Close()
-
-    // 3. Read and report progress
-    buffer := make([]byte, 32*1024)
-    lastReportTime := time.Now()
-    
-    for {
-        // Check if download is paused
-        m.mu.RLock()
-        isPaused := download.Status == "paused"
-        m.mu.RUnlock()
-        
-        if isPaused {
-            time.Sleep(500 * time.Millisecond)
+        // Get file info
+        resp, err := http.Head(url)
+        if err != nil {
+            lastError = err
+            m.sendLog(conn, url, fmt.Sprintf("Error getting file info: %v", err))
             continue
         }
+        download.Size = resp.ContentLength
         
-        n, err := resp.Body.Read(buffer)
-        if n > 0 {
-            m.mu.Lock()
-            download.Downloaded += int64(n)
-            now := time.Now()
+        // Log file size
+        m.sendLog(conn, url, fmt.Sprintf("File size: %d bytes", download.Size))
+        
+        // Start download
+        req, _ := http.NewRequest("GET", url, nil)
+        resp, err = http.DefaultClient.Do(req)
+        if err != nil {
+            lastError = err
+            m.sendLog(conn, url, fmt.Sprintf("Error starting download: %v", err))
+            continue
+        }
+        defer resp.Body.Close()
+
+        // Reset error if we get here
+        lastError = nil
+        m.sendLog(conn, url, "Download started successfully")
+        
+        // 3. Read and report progress
+        buffer := make([]byte, 32*1024)
+        lastReportTime := time.Now()
+        
+        for {
+            // Check if download is paused
+            m.mu.RLock()
+            isPaused := download.Status == "paused"
+            m.mu.RUnlock()
             
-            // Update speed more frequently
-            if now.Sub(lastReportTime) >= 250*time.Millisecond {
-                elapsed := now.Sub(download.StartTime).Seconds()
-                if elapsed > 0 {
-                    download.Speed = float64(download.Downloaded) / elapsed
-                }
-                
-                m.sendProgress(conn, download)
-                lastReportTime = now
+            if isPaused {
+                time.Sleep(500 * time.Millisecond)
+                continue
             }
-            m.mu.Unlock()
+            
+            n, err := resp.Body.Read(buffer)
+            if n > 0 {
+                m.mu.Lock()
+                download.Downloaded += int64(n)
+                now := time.Now()
+                
+                // Update speed more frequently
+                if now.Sub(lastReportTime) >= 250*time.Millisecond {
+                    elapsed := now.Sub(download.StartTime).Seconds()
+                    if elapsed > 0 {
+                        download.Speed = float64(download.Downloaded) / elapsed
+                    }
+                    
+                    m.sendProgress(conn, download)
+                    lastReportTime = now
+                }
+                m.mu.Unlock()
+            }
+
+            if err == io.EOF {
+                break
+            }
+            if err != nil {
+                m.sendError(conn, url, fmt.Sprintf("Error reading: %v", err))
+                return
+            }
         }
 
-        if err == io.EOF {
-            break
-        }
-        if err != nil {
-            m.sendError(conn, url, fmt.Sprintf("Error reading: %v", err))
-            return
-        }
+        // Update final status
+        m.mu.Lock()
+        download.Status = "completed"
+        m.mu.Unlock()
+        
+        m.sendProgress(conn, download)
+        log.Printf("Download completed: %s", url)
+        break
     }
 
-    // Update final status
-    m.mu.Lock()
-    download.Status = "completed"
-    m.mu.Unlock()
-    
-    m.sendProgress(conn, download)
-    log.Printf("Download completed: %s", url)
+    if lastError != nil {
+        m.sendError(conn, url, fmt.Sprintf("Failed after %d retries: %v", maxRetries, lastError))
+        return
+    }
 }
 
 func (m *Manager) sendProgress(conn *websocket.Conn, download *Download) {
@@ -159,6 +185,17 @@ func (m *Manager) sendError(conn *websocket.Conn, url, errorMsg string) {
         download.Status = "error"
     }
     m.mu.Unlock()
+}
+
+func (m *Manager) sendLog(conn *websocket.Conn, url string, message string) {
+    logData := map[string]interface{}{
+        "type":    "log",
+        "url":     url,
+        "message": message,
+        "time":    time.Now().Format("15:04:05"),
+    }
+    data, _ := json.Marshal(logData)
+    conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // Add pause/resume functionality

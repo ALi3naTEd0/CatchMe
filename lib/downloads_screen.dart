@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
 import 'download_item.dart';
 import 'download_service.dart';
 
@@ -99,105 +101,328 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
             padding: const EdgeInsets.all(16),
             itemBuilder: (context, index) {
               final download = _downloadService.downloads[index];
-              return Card(
-                margin: const EdgeInsets.only(bottom: 16),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // URL
-                      Text(
-                        download.url,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Colors.grey[400],
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 8),
-                      // Filename and controls
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              download.filename,
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                          ),
-                          IconButton(
-                            icon: Icon(
-                              download.status == DownloadStatus.downloading 
-                                ? Icons.pause 
-                                : Icons.play_arrow,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                            onPressed: () => download.status == DownloadStatus.downloading
-                              ? _downloadService.pauseDownload(download.url)
-                              : _downloadService.resumeDownload(download.url),
-                          ),
-                          IconButton(
-                            icon: Icon(Icons.close, 
-                              color: Theme.of(context).colorScheme.error
-                            ),
-                            onPressed: () => _downloadService.cancelDownload(download.url),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      // Stats row 1 - Progress, Speed y Avg juntos
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            '${download.formattedProgress}',
-                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          if (download.currentSpeed > 0) ...[
-                            Text('↓ ${download.formattedSpeed}'),
-                            Text('⌀ ${download.formattedAvgSpeed}'),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      // Progress bar
-                      Container(
-                        height: 12,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(6),
-                          color: Theme.of(context).colorScheme.surface,
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
-                          child: LinearProgressIndicator(
-                            value: download.progress,
-                            backgroundColor: Colors.transparent,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              Theme.of(context).colorScheme.primary,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      // Stats row 2 - Ahora size, eta y elapsed
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(download.formattedSize),
-                          Text('ETA: ${download.eta}'),
-                          Text('Time: ${download.elapsed}'),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              );
+              return _buildDownloadCard(download);
             },
           );
         },
       ),
     );
+  }
+
+  Widget _buildDownloadCard(DownloadItem download) {
+    // Definir el color con un valor por defecto para evitar nulls
+    final accent = Colors.blue[300] ?? Colors.blue;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header con filename y controles
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        download.filename,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      Text(
+                        download.url,
+                        style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                      ),
+                    ],
+                  ),
+                ),
+                if (download.status == DownloadStatus.completed)
+                  IconButton(
+                    icon: Icon(Icons.folder_open, color: accent),
+                    onPressed: () => _openFileLocation(download),
+                  )
+                else
+                  IconButton(
+                    icon: Icon(
+                      download.status == DownloadStatus.downloading 
+                        ? Icons.pause : Icons.play_arrow,
+                      color: accent,
+                    ),
+                    onPressed: () => _toggleDownload(download),
+                  ),
+                IconButton(
+                  icon: Icon(Icons.close, color: Colors.red[300]),
+                  onPressed: () => _downloadService.cancelDownload(download.url),
+                ),
+              ],
+            ),
+          ),
+
+          // Barra de progreso con stats
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Column(
+              children: [
+                // Progreso y Size
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      download.formattedProgress,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: accent,
+                      ),
+                    ),
+                    Text(
+                      download.formattedSize,
+                      style: TextStyle(color: accent),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+
+                // Barra de progreso
+                LinearProgressIndicator(
+                  value: download.progress,
+                  backgroundColor: Colors.grey[800],
+                  valueColor: AlwaysStoppedAnimation<Color>(accent), // Ahora accent no es nullable
+                  minHeight: 6,
+                ),
+                const SizedBox(height: 12),
+
+                // Stats en dos columnas con mejor contraste
+                Row(
+                  children: [
+                    // Columna izquierda: Velocidades
+                    Expanded(
+                      child: Row(
+                        children: [
+                          _buildStat(
+                            icon: Icons.speed,
+                            label: 'Speed:',
+                            value: download.formattedSpeed,
+                            color: accent,  // Ahora accent no es nullable
+                          ),
+                          const SizedBox(width: 24),
+                          _buildStat(
+                            icon: Icons.show_chart,
+                            label: 'Avg:',
+                            value: download.formattedAvgSpeed,
+                            color: accent,
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Columna derecha: Tiempos
+                    Expanded(
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          _buildStat(
+                            icon: Icons.timer,
+                            label: 'ETA:',
+                            value: download.eta,
+                            color: accent,
+                          ),
+                          const SizedBox(width: 24),
+                          _buildStat(
+                            icon: Icons.access_time,
+                            label: 'Time:',
+                            value: download.elapsed,
+                            color: accent,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // Mini log más visible y durante la descarga
+          if (download.status == DownloadStatus.downloading || download.logs.isNotEmpty)
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.grey[900],
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: accent.withOpacity(0.2)),
+              ),
+              constraints: BoxConstraints(
+                maxHeight: 120,  // Más alto para mostrar más logs
+                minHeight: 60,   // Altura mínima para que siempre se vea bien
+              ),
+              child: ListView.builder(
+                reverse: true,
+                itemCount: download.logs.length,
+                itemBuilder: (_, i) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Text(
+                    download.logs[download.logs.length - i - 1],
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: Colors.grey[400],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStat({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: TextStyle(color: color),
+        ),
+        const SizedBox(width: 4),
+        Text(value),
+      ],
+    );
+  }
+
+  Widget _buildHeader(DownloadItem download) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // URL con estilo monoespacio
+          Text(
+            download.url,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 8),
+          
+          // Filename and controls
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  download.filename,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              if (download.status == DownloadStatus.completed)
+                IconButton(
+                  icon: Icon(
+                    Icons.folder_open,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  onPressed: () => _openFileLocation(download),
+                  tooltip: 'Open folder',
+                )
+              else
+                IconButton(
+                  icon: Icon(
+                    download.status == DownloadStatus.downloading 
+                      ? Icons.pause 
+                      : Icons.play_arrow,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  onPressed: () => _toggleDownload(download),
+                ),
+              IconButton(
+                icon: Icon(
+                  Icons.close,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                onPressed: () => _downloadService.cancelDownload(download.url),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatItem({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 8),
+      child: Column(
+        children: [
+          Icon(icon, size: 16, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(height: 4),
+          Text(label,
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+          Text(value,
+            style: TextStyle(fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRetryButton(DownloadItem download) {
+    return TextButton.icon(
+      onPressed: () => _retryDownload(download),
+      icon: Icon(Icons.refresh),
+      label: Text('Retry'),
+      style: TextButton.styleFrom(
+        foregroundColor: Theme.of(context).colorScheme.error,
+      ),
+    );
+  }
+
+  void _retryDownload(DownloadItem download) {
+    _downloadService.startDownload(download.url);
+  }
+
+  Future<void> _openFileLocation(DownloadItem download) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final path = '${dir.path}/downloads';
+    
+    try {
+      if (Platform.isLinux) {
+        await Process.run('xdg-open', [path]);
+      } else if (Platform.isWindows) {
+        await Process.run('explorer', [path]);
+      } else if (Platform.isMacOS) {
+        await Process.run('open', [path]);
+      }
+    } catch (e) {
+      print('Error opening folder: $e');
+    }
+  }
+
+  void _toggleDownload(DownloadItem download) {
+    if (download.status == DownloadStatus.downloading) {
+      _downloadService.pauseDownload(download.url);
+    } else {
+      _downloadService.resumeDownload(download.url);
+    }
   }
 }

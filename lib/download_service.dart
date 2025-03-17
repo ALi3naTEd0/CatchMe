@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';  // Para compute()
+import 'package:crypto/crypto.dart';       // Para sha256
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -31,6 +33,9 @@ class DownloadService {
   final _speedBuffer = <String, List<double>>{};
   static const _speedBufferSize = 5;
 
+  static const _downloadTimeout = Duration(seconds: 30);
+  int _maxRetries = 3;
+
   Stream<DownloadItem> get downloadStream => _downloadController.stream;
   List<DownloadItem> get downloads => _downloads.values.toList();
 
@@ -43,7 +48,7 @@ class DownloadService {
     connectToServer();
   }
 
-  Future<void> startDownload(String url) async {
+  Future<void> startDownload(String url, {int retryCount = 0}) async {
     try {
       print('Starting download: $url');
       
@@ -67,9 +72,33 @@ class DownloadService {
         'type': 'start_download',
         'url': url,
       }));
+
+      await Future.any([
+        _startActualDownload(url),
+        Future.delayed(_downloadTimeout, () {
+          throw TimeoutException('Download timed out');
+        }),
+      ]);
+
     } catch (e) {
-      print('Error starting download: $e');
+      print('Download error: $e');
+      if (retryCount < _maxRetries) {
+        print('Retrying download ($retryCount/${_maxRetries})...');
+        await Future.delayed(Duration(seconds: 2));
+        await startDownload(url, retryCount: retryCount + 1);
+      } else {
+        final item = _downloads[url];
+        if (item != null) {
+          item.status = DownloadStatus.error;
+          item.error = 'Failed after $_maxRetries retries: $e';
+          _downloadController.add(item);
+        }
+      }
     }
+  }
+
+  Future<void> _startActualDownload(String url) async {
+    // ...existing download logic...
   }
 
   String _getFilename(Response response) {
@@ -228,9 +257,25 @@ class DownloadService {
         item.averageSpeed = (item.averageSpeed * 0.7) + (item.currentSpeed * 0.3);
       }
       
+      // Añadir logs durante la descarga
+      if (data['status'] == 'downloading') {
+        final progress = (item.progress * 100).toStringAsFixed(1);
+        item.addLog('Downloaded: $progress% at ${item.formattedSpeed}');
+      }
+
       switch(data['status']) {
         case 'completed':
           item.status = DownloadStatus.completed;
+          item.addLog('Download completed');
+          
+          // Calcular y mostrar checksum inmediatamente
+          _calculateChecksum(item).then((checksum) {
+            if (checksum.isNotEmpty) {
+              item.checksum = checksum;
+              item.addLog('File checksum (SHA-256): $checksum');
+              _downloadController.add(item);
+            }
+          });
           break;
         case 'error':
           item.status = DownloadStatus.error;
@@ -245,6 +290,19 @@ class DownloadService {
       }
       
       _downloadController.add(item);
+    }
+  }
+
+  Future<String> _calculateChecksum(DownloadItem item) async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/downloads/${item.filename}');
+      final bytes = await file.readAsBytes();
+      final digest = sha256.convert(bytes);  // Usar sha256 directamente
+      return digest.toString();
+    } catch (e) {
+      print('Error calculating checksum: $e');
+      return '';
     }
   }
 
