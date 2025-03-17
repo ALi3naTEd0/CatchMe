@@ -1,38 +1,48 @@
 # CatchMe TODO List
 
-## Download Features
-- [x] Al terminar en vez de mostrar "play" mostrar icono de carpeta
-- [x] Mostrar velocidad y promedio de forma más clara (Speed: x/s, Avg: x/s)
-- [x] Agregar mini-log debajo de cada descarga
-- [x] Implementar verificación SHA del archivo descargado
-- [ ] Mostrar descargas completadas en pantalla "Completed"
+## High Priority
+- [ ] Implement "Completed" screen functionality
+- [ ] Add download folder configuration
+- [ ] Add downloads persistence
+- [ ] Implement proper error handling with user feedback
 
-## Settings Screen
-- [ ] Download Location
-  - [ ] Mostrar carpeta actual
-  - [ ] Permitir al usuario elegir carpeta personalizada
-  - [ ] Mantener "downloads" como default
+## UI/UX
+- [x] Enhanced download card layout
+- [x] Real-time progress indicators
+- [x] Connection status indicators
+- [x] Download logs integration
+- [ ] Theme selector implementation
+- [ ] Responsive layout improvements
 
-- [ ] Content Types
-  - [ ] Lista de formatos predeterminados para downloader
-  - [ ] Opción "Download all from browser"
-  - [ ] Lista personalizada de formatos
+## Features
+- [x] SHA-256 verification
+- [x] Auto-retry mechanism
+- [ ] Browser extension support
+- [ ] Custom download formats configuration
+- [ ] Multiple simultaneous downloads
+- [ ] Download queue management
 
-- [ ] Appearance
-  - [ ] Selector de temas
-  - [ ] Preferencias visuales
+## Settings
+- [ ] Download location configuration
+- [ ] Format preferences
+- [ ] Theme selection
+- [ ] Auto-update configuration
+- [ ] Browser extension management
 
-- [ ] Browser Extensions
-  - [ ] Link a extensión de Chrome (referencia)
-  - [ ] Link a extensión de Firefox (referencia)
+## Documentation
+- [ ] API documentation
+- [ ] User guide
+- [ ] Extension development guide
+- [ ] Contribution guidelines
 
-- [ ] Updates
-  - [ ] Verificación de nuevas versiones
-  - [ ] Changelog
-  - [ ] Auto-update toggle
+## Testing
+- [ ] Unit tests for core functionality
+- [ ] Integration tests
+- [ ] UI tests
+- [ ] Cross-platform testing
 
-- [ ] About
-  - [ ] Nombre de la app: CatchMe
-  - [ ] Autor: Eduardo Antonio Fortuny Ruvalcaba
-  - [ ] Licencia MIT
-  - [ ] Link al repositorio
+## Distribution
+- [ ] Release workflow
+- [ ] Package for different platforms
+- [ ] Auto-update mechanism
+- [ ] Extension store publications
