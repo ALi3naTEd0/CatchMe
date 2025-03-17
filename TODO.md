@@ -1,33 +1,57 @@
 # CatchMe TODO List
 
-## High Priority
-- [ ] Implement "Completed" screen functionality
-- [ ] Add download folder configuration
-- [ ] Add downloads persistence
-- [ ] Implement proper error handling with user feedback
+## High Priority (Current Sprint)
+- [ ] Fix download paths
+  - [x] Use system Downloads folder (/home/x/Downloads/catchme)
+  - [ ] Show correct path in logs
+  - [ ] Ensure folder exists and has permissions
+  - [ ] Add folder configuration in Settings
 
-## UI/UX
-- [x] Enhanced download card layout
-- [x] Real-time progress indicators
-- [x] Connection status indicators
-- [x] Download logs integration
-- [ ] Theme selector implementation
-- [ ] Responsive layout improvements
+- [ ] Improve download completion
+  - [ ] Show downloads in "Completed" screen after finishing
+  - [x] SHA-256 verification on completion
+  - [x] Show folder icon instead of play button when completed
+  - [ ] Add source verification option
 
-## Features
-- [x] SHA-256 verification
-- [x] Auto-retry mechanism
-- [ ] Browser extension support
-- [ ] Custom download formats configuration
-- [ ] Multiple simultaneous downloads
-- [ ] Download queue management
+- [ ] Enhance download monitoring
+  - [x] Add detailed mini-log below each download
+  - [x] Clear speed/time indicators ("Speed:", "Avg:", "ETA:", "Time:")
+  - [ ] Auto-detect URLs from clipboard
+  - [ ] Add copy-paste area for URLs
 
-## Settings
-- [ ] Download location configuration
-- [ ] Format preferences
-- [ ] Theme selection
-- [ ] Auto-update configuration
-- [ ] Browser extension management
+## Settings Implementation
+- [ ] Download Configuration
+  - [ ] Custom download location picker
+  - [ ] Default formats selection
+  - [ ] Browser download interception options
+  - [ ] Custom format lists
+
+- [ ] Application Settings
+  - [ ] Theme selector
+  - [ ] Browser extension management
+  - [ ] Auto-update preferences
+  - [ ] Language selection
+
+## Features Backlog
+- [ ] Browser Extensions
+  - [ ] Chrome extension stub
+  - [ ] Firefox extension stub
+  - [ ] Extension installation guides
+  - [ ] Extension store references
+
+- [ ] Download Management
+  - [ ] Multiple simultaneous downloads
+  - [ ] Download queue system
+  - [ ] Download prioritization
+  - [ ] Bandwidth control
+
+## Infrastructure
+- [ ] About Section
+  - [ ] App info & version
+  - [ ] Author credit (Eduardo Antonio Fortuny Ruvalcaba)
+  - [ ] MIT license
+  - [ ] Repository link
+  - [ ] Update checker
 
 ## Documentation
 - [ ] API documentation
