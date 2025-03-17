@@ -1,12 +1,25 @@
 # CatchMe TODO List
 
 ## High Priority (Current Sprint)
-- [ ] Fix download paths
-  - [x] Use system Downloads folder (/home/x/Downloads/catchme)
-  - [ ] Show correct path in logs
-  - [ ] Ensure folder exists and has permissions
-  - [ ] Add folder configuration in Settings
+- [ ] Fix basic functionality
+  - [ ] Server starts correctly
+  - [ ] WebSocket connection works
+  - [ ] Downloads go to correct folder
+  - [ ] Progress updates shown in UI
 
+- [ ] Download paths and storage
+  - [ ] Use system Downloads folder (/home/x/Downloads/catchme)
+  - [ ] Create folder if not exists
+  - [ ] Verify write permissions
+  - [ ] Show correct path in logs
+
+- [ ] UI Improvements
+  - [ ] Enhanced download card layout
+  - [ ] Real-time progress indicators
+  - [ ] Connection status indicators
+  - [ ] Download logs integration
+
+## Next Steps
 - [ ] Improve download completion
   - [ ] Show downloads in "Completed" screen after finishing
   - [x] SHA-256 verification on completion
