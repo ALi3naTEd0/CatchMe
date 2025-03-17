@@ -225,6 +225,9 @@ class DownloadService {
         case 'error':
           _handleErrorMessage(data);
           break;
+        case 'log':
+          _handleLogMessage(data);
+          break;
         case 'pong':
           // Heartbeat response
           break;
@@ -295,10 +298,22 @@ class DownloadService {
 
   Future<String> _calculateChecksum(DownloadItem item) async {
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/downloads/${item.filename}');
+      final home = Platform.environment['HOME']!;
+      final filePath = '${home}/Downloads/${item.filename}';
+      print('Calculating SHA-256 for: $filePath');
+      
+      final file = File(filePath);
+      if (!await file.exists()) {
+        throw Exception('File not found: $filePath');
+      }
+      
       final bytes = await file.readAsBytes();
-      final digest = sha256.convert(bytes);  // Usar sha256 directamente
+      final digest = sha256.convert(bytes);
+      
+      // Agregar log inmediatamente
+      item.addLog('SHA-256: ${digest.toString()}');
+      _downloadController.add(item);
+      
       return digest.toString();
     } catch (e) {
       print('Error calculating checksum: $e');
@@ -318,6 +333,22 @@ class DownloadService {
     }
     
     print('Download error: $error');
+  }
+
+  void _handleLogMessage(Map<String, dynamic> data) {
+    final url = data['url'] as String;
+    final message = data['message'] as String;
+    
+    final item = _downloads[url];
+    if (item != null) {
+      // Detectar y guardar SHA-256
+      if (message.startsWith('SHA-256: ')) {
+        item.checksum = message.substring(8);
+      }
+      
+      item.addLog(message);
+      _downloadController.add(item);
+    }
   }
 
   void _handleDisconnect() {

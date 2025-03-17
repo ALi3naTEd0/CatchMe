@@ -71,6 +71,36 @@ class _MainScreenState extends State<MainScreen> {
     super.dispose();
   }
 
+  Widget _buildServerStatus() {
+    return StreamBuilder<bool>(
+      stream: ServerLauncher().statusStream,
+      initialData: false,
+      builder: (context, snapshot) {
+        final isRunning = snapshot.data ?? false;
+        return Row(
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: isRunning ? Colors.green : Colors.red,
+              ),
+            ),
+            SizedBox(width: 8),
+            Text(
+              isRunning ? 'Server Running' : 'Server Stopped',
+              style: TextStyle(
+                fontSize: 12,
+                color: isRunning ? Colors.green : Colors.red,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -148,38 +178,15 @@ class _MainScreenState extends State<MainScreen> {
                 // Screen content
                 Expanded(child: _screens[_selectedIndex]),
                 
-                // Server status con padding alineado
+                // Server status bar
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 8), // Padding aumentado a la izquierda
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
                   margin: const EdgeInsets.only(bottom: 8),
                   color: Theme.of(context).colorScheme.surface,
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      StreamBuilder<bool>(
-                        stream: ServerLauncher().statusStream,
-                        initialData: false,
-                        builder: (context, snapshot) {
-                          final isRunning = snapshot.data ?? false;
-                          return Row(
-                            children: [
-                              Icon(
-                                isRunning ? Icons.dns : Icons.dns_outlined,
-                                size: 16,
-                                color: isRunning ? Colors.green : Colors.red,
-                              ),
-                              SizedBox(width: 8),
-                              Text(
-                                isRunning ? 'Server Running' : 'Server Stopped',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: isRunning ? Colors.green : Colors.red,
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
+                      _buildServerStatus(),
                     ],
                   ),
                 ),
