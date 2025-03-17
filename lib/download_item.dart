@@ -6,7 +6,7 @@ enum DownloadStatus { queued, downloading, completed, paused, error }
 class DownloadItem {
   final String url;
   final String filename;
-  final int totalBytes;
+  int totalBytes;  // Cambiar de final a int para permitir actualización
   int downloadedBytes;
   double progress;
   double currentSpeed;

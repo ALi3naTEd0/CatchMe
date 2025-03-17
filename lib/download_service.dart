@@ -38,129 +38,37 @@ class DownloadService {
     if (_downloadController.isClosed) {
       _downloadController = StreamController<DownloadItem>.broadcast();
     }
+    
+    // Initialize WebSocket connection
+    connectToServer();
   }
 
   Future<void> startDownload(String url) async {
     try {
-      print('-------------- Starting new download --------------');
-      print('URL: $url');
-      print('Stream controller state: ${_downloadController.isClosed ? 'closed' : 'open'}');
-
-      if (_downloadController.isClosed) {
-        print('Reinitializing stream controller');
-        init();
-      }
-
-      // Verificar si ya existe
-      if (_downloads.containsKey(url)) {
-        print('Download already exists, current state:');
-        print('Status: ${_downloads[url]?.status}');
-        print('Progress: ${_downloads[url]?.progress}');
-        return;
-      }
-
       print('Starting download: $url');
-      _cancelToken = CancelToken();
-      _isPaused = false;
-
-      // Enviar petición al servidor Go
-      _socket.sink.add({
-        'type': 'start_download',
-        'url': url,
-      });
-
-      // Get file info
-      final response = await _dio.head(url);
-      final contentLength = int.parse(response.headers.value('content-length') ?? '0');
-      final filename = _getFilename(response);
-
-      // Create download item
+      
+      if (!_isConnected) {
+        await connectToServer();
+      }
+      
+      // Create initial item for the UI
       final item = DownloadItem(
         url: url,
-        filename: filename,
-        totalBytes: contentLength,
+        filename: url.split('/').last,
+        totalBytes: 0,
+        status: DownloadStatus.downloading,
       );
+      
       _downloads[url] = item;
-
-      // Get download directory
-      final dir = await getApplicationDocumentsDirectory();
-      final savePath = '${dir.path}/downloads/$filename';
-
-      // Create directory if not exists
-      await Directory('${dir.path}/downloads').create(recursive: true);
-
-      // Si es una reanudación, usar el progreso guardado
-      final existingProgress = _downloadProgress[url] ?? 0;
-      if (existingProgress > 0) {
-        print('Resuming from byte: $existingProgress');
-        _dio.options.headers['Range'] = 'bytes=$existingProgress-';
-      }
-
-      // Start download
-      await _dio.download(
-        url,
-        savePath,
-        cancelToken: _cancelToken,
-        onReceiveProgress: (received, total) {
-          if (_isPaused) return;
-          
-          // Garantizar números finitos y positivos
-          if (received < 0 || total <= 0) {
-            print('Invalid progress values: received=$received, total=$total');
-            return;
-          }
-
-          try {
-            final now = DateTime.now();
-            final elapsed = max(now.difference(item.startTime).inSeconds, 1);
-            
-            item.downloadedBytes = received;
-            item.progress = received / total;
-            
-            // Prevenir división por cero y valores inválidos
-            if (elapsed > 0) {
-              // Velocidad instantánea con límite máximo
-              final speed = min(received / elapsed, received.toDouble());
-              item.currentSpeed = speed.isFinite ? speed : 0;
-              
-              // Media móvil exponencial para velocidad promedio
-              if (item.averageSpeed <= 0) {
-                item.averageSpeed = item.currentSpeed;
-              } else {
-                item.averageSpeed = (item.averageSpeed * 0.7) + (item.currentSpeed * 0.3);
-              }
-            } else {
-              item.currentSpeed = 0;
-              item.averageSpeed = 0;
-            }
-
-            item.status = DownloadStatus.downloading;
-            _downloadController.add(item);
-          } catch (e) {
-            print('Error calculating speeds: $e');
-          }
-        },
-        deleteOnError: false,
-      );
-
-      item.status = DownloadStatus.completed;
       _downloadController.add(item);
-    } catch (e, stack) {
-      print('Download error:');
-      print('Error: $e');
-      print('Stack: $stack');
-
-      final item = _downloads[url];
-      if (item != null) {
-        item.status = DownloadStatus.error;
-        item.error = e.toString();
-        try {
-          _downloadController.add(item);
-        } catch (streamError) {
-          print('Error updating stream:');
-          print('Error: $streamError');
-        }
-      }
+      
+      // Send download request to the Go server
+      _channel!.sink.add(jsonEncode({
+        'type': 'start_download',
+        'url': url,
+      }));
+    } catch (e) {
+      print('Error starting download: $e');
     }
   }
 
@@ -175,27 +83,38 @@ class DownloadService {
 
   void pauseDownload(String url) {
     print('Pausing download: $url');
-    _isPaused = true;
-    // Preservar progreso actual
-    _lastBytes[url] = _downloads[url]?.downloadedBytes ?? 0;
-    _cancelToken?.cancel('Paused by user');
-    _cancelToken = null;
     
-    final download = _downloads[url];
-    if (download != null) {
-      download.status = DownloadStatus.paused;
-      download.currentSpeed = 0;
-      download.averageSpeed = 0;
-      _downloadController.add(download);
+    if (_isConnected && _channel != null) {
+      _channel!.sink.add(jsonEncode({
+        'type': 'pause_download',
+        'url': url,
+      }));
+      
+      // Update UI immediately for better UX
+      final item = _downloads[url];
+      if (item != null) {
+        item.status = DownloadStatus.paused;
+        item.currentSpeed = 0;
+        _downloadController.add(item);
+      }
     }
   }
 
   void resumeDownload(String url) {
     print('Resuming download: $url');
-    _isPaused = false;
-    final item = _downloads[url];
-    if (item != null) {
-      startDownload(url); // Reiniciar descarga desde el último punto
+    
+    if (_isConnected && _channel != null) {
+      _channel!.sink.add(jsonEncode({
+        'type': 'resume_download',
+        'url': url,
+      }));
+      
+      // Update UI immediately for better UX
+      final item = _downloads[url];
+      if (item != null) {
+        item.status = DownloadStatus.downloading;
+        _downloadController.add(item);
+      }
     }
   }
 
@@ -221,5 +140,145 @@ class DownloadService {
   @override
   void dispose() {
     _downloadController.close();
+  }
+
+  // Improved WebSocket handling
+  WebSocketChannel? _channel;
+  bool _isConnected = false;
+  Timer? _reconnectTimer;
+  Timer? _pingTimer;
+
+  Future<void> connectToServer() async {
+    if (_isConnected) return;
+    
+    try {
+      print('Connecting to WebSocket server...');
+      _channel = WebSocketChannel.connect(Uri.parse('ws://localhost:8080/ws'));
+      await _channel!.ready;
+      
+      _isConnected = true;
+      print('Connected to server');
+      
+      // Setup listeners
+      _setupMessageHandling();
+      _startPingTimer();
+      
+    } catch (e) {
+      print('Failed to connect to server: $e');
+      _scheduleReconnect();
+    }
+  }
+
+  void _setupMessageHandling() {
+    _channel!.stream.listen(
+      (message) => _handleServerMessage(message),
+      onError: (e) {
+        print('WebSocket error: $e');
+        _handleDisconnect();
+      },
+      onDone: () {
+        print('WebSocket connection closed');
+        _handleDisconnect();
+      },
+    );
+  }
+
+  void _handleServerMessage(dynamic message) {
+    if (message is! String) return;
+    
+    try {
+      final data = jsonDecode(message);
+      
+      switch(data['type']) {
+        case 'progress':
+          _handleProgressUpdate(data);
+          break;
+        case 'error':
+          _handleErrorMessage(data);
+          break;
+        case 'pong':
+          // Heartbeat response
+          break;
+        default:
+          print('Unknown message type: ${data['type']}');
+      }
+    } catch (e) {
+      print('Error processing message: $e');
+    }
+  }
+
+  void _handleProgressUpdate(Map<String, dynamic> data) {
+    final url = data['url'];
+    final item = _downloads[url];
+    
+    if (item != null) {
+      item.downloadedBytes = data['bytesReceived'] ?? 0;
+      item.totalBytes = data['totalBytes'] ?? 0;
+      
+      if (item.totalBytes > 0) {
+        item.progress = item.downloadedBytes / item.totalBytes;
+      }
+      
+      item.currentSpeed = (data['speed'] ?? 0.0).toDouble();
+      
+      // Update average speed using exponential moving average
+      if (item.averageSpeed <= 0) {
+        item.averageSpeed = item.currentSpeed;
+      } else {
+        item.averageSpeed = (item.averageSpeed * 0.7) + (item.currentSpeed * 0.3);
+      }
+      
+      switch(data['status']) {
+        case 'completed':
+          item.status = DownloadStatus.completed;
+          break;
+        case 'error':
+          item.status = DownloadStatus.error;
+          item.error = data['error'];
+          break;
+        case 'downloading':
+          item.status = DownloadStatus.downloading;
+          break;
+        case 'paused':
+          item.status = DownloadStatus.paused;
+          break;
+      }
+      
+      _downloadController.add(item);
+    }
+  }
+
+  void _handleErrorMessage(Map<String, dynamic> data) {
+    final url = data['url'];
+    final error = data['error'];
+    
+    final item = _downloads[url];
+    if (item != null) {
+      item.status = DownloadStatus.error;
+      item.error = error;
+      _downloadController.add(item);
+    }
+    
+    print('Download error: $error');
+  }
+
+  void _handleDisconnect() {
+    _isConnected = false;
+    _pingTimer?.cancel();
+    _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(Duration(seconds: 3), connectToServer);
+  }
+
+  void _startPingTimer() {
+    _pingTimer?.cancel();
+    _pingTimer = Timer.periodic(Duration(seconds: 30), (_) {
+      if (_isConnected) {
+        _channel!.sink.add(jsonEncode({'type': 'ping'}));
+      }
+    });
   }
 }
