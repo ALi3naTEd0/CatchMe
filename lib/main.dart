@@ -167,79 +167,33 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final showSidebar = screenWidth > 600; // Hide sidebar on very small screens
+
     return Scaffold(
+      // Drawer para mobile
+      drawer: !showSidebar ? _buildNavigationDrawer() : null,
       body: Row(
         children: [
-          // Side panel
-          Container(
-            width: 200,
-            child: Column(
-              children: [
-                // Navigation rail
-                Expanded(
-                  child: NavigationRail(
-                    extended: true,
-                    destinations: const [
-                      NavigationRailDestination(
-                        icon: Icon(Icons.download),
-                        label: Text('Downloads'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.check_circle),
-                        label: Text('Completed'),
-                      ),
-                      NavigationRailDestination(
-                        icon: Icon(Icons.settings),
-                        label: Text('Settings'),
-                      ),
-                    ],
-                    selectedIndex: _selectedIndex,
-                    onDestinationSelected: (int index) {
-                      setState(() {
-                        _selectedIndex = index;
-                      });
-                    },
-                  ),
-                ),
-                
-                // Estado de extensión (abajo izquierda)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  margin: const EdgeInsets.only(bottom: 8, left: 8, right: 8),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surface,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.extension,
-                        size: 16,
-                        color: Colors.orange,
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        'Disconnected',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold, // Texto en negrita
-                          color: Colors.orange,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+          // Side panel solo si hay espacio
+          if (showSidebar)
+            Container(
+              width: 200,
+              child: _buildSidePanel(),
             ),
-          ),
 
-          const VerticalDivider(thickness: 1, width: 1),
+          if (showSidebar)
+            const VerticalDivider(thickness: 1, width: 1),
           
-          // Main content area
+          // Main content
           Expanded(
             child: Column(
               children: [
+                if (!showSidebar)
+                  AppBar(
+                    title: const Text('CatchMe'),
+                    backgroundColor: Theme.of(context).colorScheme.surface,
+                  ),
                 // Show loading if server not started yet
                 if (!_serverStarted)
                   Expanded(
@@ -280,6 +234,73 @@ class _MainScreenState extends State<MainScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildNavigationDrawer() {
+    return Drawer(
+      child: _buildSidePanel(),
+    );
+  }
+
+  Widget _buildSidePanel() {
+    return Column(
+      children: [
+        // Navigation rail content
+        Expanded(
+          child: NavigationRail(
+            extended: true,
+            destinations: const [
+              NavigationRailDestination(
+                icon: Icon(Icons.download),
+                label: Text('Downloads'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.check_circle),
+                label: Text('Completed'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.settings),
+                label: Text('Settings'),
+              ),
+            ],
+            selectedIndex: _selectedIndex,
+            onDestinationSelected: (int index) {
+              setState(() {
+                _selectedIndex = index;
+              });
+            },
+          ),
+        ),
+        // Extension status
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          margin: const EdgeInsets.only(bottom: 8, left: 8, right: 8),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.extension,
+                size: 16,
+                color: Colors.orange,
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Disconnected',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold, // Texto en negrita
+                  color: Colors.orange,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

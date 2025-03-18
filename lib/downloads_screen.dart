@@ -127,8 +127,9 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   }
 
   Widget _buildDownloadCard(DownloadItem download) {
-    // Definir el color con un valor por defecto para evitar nulls
     final accent = Colors.blue[300] ?? Colors.blue;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 800;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
@@ -211,89 +212,162 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                 ),
                 const SizedBox(height: 12),
 
-                // Stats en dos columnas con mejor contraste
-                Row(
-                  children: [
-                    // Columna izquierda: Velocidades
-                    Expanded(
-                      child: Row(
+                // Stats según layout
+                if (isMobile)
+                  Column(
+                    children: [
+                      // Primera fila: Speed y ETA
+                      Row(
                         children: [
-                          _buildStat(
-                            icon: Icons.speed,
-                            label: 'Speed:',
-                            value: download.formattedSpeed,
-                            color: accent,  // Ahora accent no es nullable
+                          Expanded(
+                            flex: 1,
+                            child: _buildStat(
+                              icon: Icons.speed,
+                              label: 'Speed:',
+                              value: download.formattedSpeed,
+                              color: accent,
+                              iconSize: 18,
+                              fontSize: 13,
+                            ),
                           ),
-                          const SizedBox(width: 24),
-                          _buildStat(
-                            icon: Icons.show_chart,
-                            label: 'Avg:',
-                            value: download.formattedAvgSpeed,
-                            color: accent,
+                          Expanded(
+                            flex: 1,
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: _buildStat(
+                                icon: Icons.timer,
+                                label: 'ETA:',
+                                value: download.eta,
+                                color: accent,
+                                iconSize: 18,
+                                fontSize: 13,
+                              ),
+                            ),
                           ),
                         ],
                       ),
-                    ),
-                    // Columna derecha: Tiempos
-                    Expanded(
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
+                      const SizedBox(height: 8),
+                      // Segunda fila: Avg y Time
+                      Row(
                         children: [
-                          _buildStat(
-                            icon: Icons.timer,
-                            label: 'ETA:',
-                            value: download.eta,
-                            color: accent,
+                          Expanded(
+                            flex: 1,
+                            child: _buildStat(
+                              icon: Icons.show_chart,
+                              label: 'Avg:',
+                              value: download.formattedAvgSpeed,
+                              color: accent,
+                              iconSize: 18,
+                              fontSize: 13,
+                            ),
                           ),
-                          const SizedBox(width: 24),
-                          _buildStat(
-                            icon: Icons.access_time,
-                            label: 'Time:',
-                            value: download.elapsed,
-                            color: accent,
+                          Expanded(
+                            flex: 1,
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: _buildStat(
+                                icon: Icons.access_time,
+                                label: 'Time:',
+                                value: download.elapsed,
+                                color: accent,
+                                iconSize: 18,
+                                fontSize: 13,
+                              ),
+                            ),
                           ),
                         ],
                       ),
+                    ],
+                  )
+                else
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Row(
+                          children: [
+                            _buildStat(
+                              icon: Icons.speed,
+                              label: 'Speed:',
+                              value: download.formattedSpeed,
+                              color: accent,
+                              iconSize: 18,
+                              fontSize: 13,
+                            ),
+                            const SizedBox(width: 24),
+                            _buildStat(
+                              icon: Icons.show_chart,
+                              label: 'Avg:',
+                              value: download.formattedAvgSpeed,
+                              color: accent,
+                              iconSize: 18,
+                              fontSize: 13,
+                            ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            _buildStat(
+                              icon: Icons.timer,
+                              label: 'ETA:',
+                              value: download.eta,
+                              color: accent,
+                              iconSize: 18,
+                              fontSize: 13,
+                            ),
+                            const SizedBox(width: 24),
+                            _buildStat(
+                              icon: Icons.access_time,
+                              label: 'Time:',
+                              value: download.elapsed,
+                              color: accent,
+                              iconSize: 18,
+                              fontSize: 13,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+
+                // Mini log más visible y durante la descarga
+                if (download.status == DownloadStatus.downloading || download.logs.isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[900],
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: accent.withOpacity(0.2)),
                     ),
-                  ],
-                ),
+                    constraints: const BoxConstraints(
+                      maxHeight: 150,  // Más alto para mostrar más logs
+                      minHeight: 80,  // Altura mínima para que siempre se vea bien
+                    ),
+                    child: ListView.builder(
+                      reverse: true,
+                      itemCount: download.logs.length,
+                      padding: EdgeInsets.zero,
+                      itemExtent: 18.0, // Altura fija por elemento para scroll uniforme
+                      itemBuilder: (_, i) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 1),
+                        child: Text(
+                          download.logs[download.logs.length - i - 1],
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 11,
+                            color: Colors.white70,
+                            height: 1.2,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
-
-          // Mini log más visible y durante la descarga
-          if (download.status == DownloadStatus.downloading || download.logs.isNotEmpty)
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.grey[900],
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: accent.withOpacity(0.2)),
-              ),
-              constraints: const BoxConstraints(
-                maxHeight: 150,  // Más alto para mostrar más logs
-                minHeight: 80,  // Altura mínima para que siempre se vea bien
-              ),
-              child: ListView.builder(
-                reverse: true,
-                itemCount: download.logs.length,
-                padding: EdgeInsets.zero,
-                itemExtent: 18.0, // Altura fija por elemento para scroll uniforme
-                itemBuilder: (_, i) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 1),
-                  child: Text(
-                    download.logs[download.logs.length - i - 1],
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 11,
-                      color: Colors.white70,
-                      height: 1.2,
-                    ),
-                  ),
-                ),
-              ),
-            ),
         ],
       ),
     );
@@ -304,18 +378,26 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     required String label,
     required String value,
     required Color color,
+    double iconSize = 18,
+    double fontSize = 13,
   }) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 16, color: color),
-        const SizedBox(width: 4),
+        Icon(icon, size: iconSize, color: color),
+        SizedBox(width: iconSize * 0.25),
         Text(
           label,
-          style: TextStyle(color: color),
+          style: TextStyle(
+            color: color,
+            fontSize: fontSize,
+          ),
         ),
-        const SizedBox(width: 4),
-        Text(value),
+        SizedBox(width: iconSize * 0.25),
+        Text(
+          value,
+          style: TextStyle(fontSize: fontSize),
+        ),
       ],
     );
   }

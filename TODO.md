@@ -9,10 +9,12 @@
 
 ## Phase 2: UI/UX ✅
 - [x] Main Interface
-  - [x] Download cards design
+  - [x] Design download cards
   - [x] Progress indicators
   - [x] Speed and time display
   - [x] Per-download logs with timestamps
+  - [x] Responsive layout for all screen sizes
+  - [x] Mobile-first design with drawer navigation
 
 ## Phase 3: Extra Features
 - [ ] Download Management
@@ -33,6 +35,10 @@
 - WebSocket-based communication
 - Connection status indicators
 - Basic error handling and recovery
+- Responsive UI with mobile and tablet support
+- Collapsible sidebar for small screens
+- Optimized stats layout for different screen sizes
+- Consistent spacing and alignment across devices
 
 ### 🚧 In Progress - Server Improvements
 - Chunked downloads support
