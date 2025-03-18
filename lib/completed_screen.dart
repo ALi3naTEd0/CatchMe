@@ -48,15 +48,35 @@ class _CompletedScreenState extends State<CompletedScreen> {
               children: [
                 Text(download.formattedSize),
                 if (download.checksum != null)
-                  Row(
-                    children: [
-                      Icon(Icons.verified, size: 16, color: Colors.green),
-                      SizedBox(width: 4),
-                      Text(
-                        'SHA-256: ${download.checksum!.substring(0, 8)}...',
-                        style: TextStyle(fontSize: 12),
-                      ),
-                    ],
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.verified, size: 16, color: Colors.green),
+                        SizedBox(width: 4),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'SHA-256:',
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                              ),
+                              Text(
+                                download.checksum!,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontFamily: 'monospace',
+                                  letterSpacing: -0.3,
+                                ),
+                                softWrap: true,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
               ],
             ),
@@ -66,11 +86,14 @@ class _CompletedScreenState extends State<CompletedScreen> {
                 IconButton(
                   icon: Icon(Icons.folder_open),
                   onPressed: () => _openFileLocation(download),
+                  tooltip: 'Open Downloads folder',
                 ),
-                IconButton(
-                  icon: Icon(Icons.copy),
-                  onPressed: () => _copyChecksum(download),
-                ),
+                if (download.checksum != null)
+                  IconButton(
+                    icon: Icon(Icons.copy),
+                    onPressed: () => _copyChecksum(download),
+                    tooltip: 'Copy checksum to clipboard',
+                  ),
               ],
             ),
           ),

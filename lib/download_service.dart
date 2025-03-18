@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'dart:convert';
+import 'dart:typed_data';  // Para Uint8List
 import 'package:flutter/foundation.dart';  // Para compute()
 import 'package:flutter/widgets.dart';     // Para WidgetsBinding
 import 'package:crypto/crypto.dart';       // Para sha256
@@ -252,12 +253,20 @@ class DownloadService {
       
       // Calcular progreso
       if (item.totalBytes > 0) {
+        // Guardar el progreso anterior para comparar
+        final oldProgress = item.progress;
+        
+        // Actualizar progreso
         item.progress = item.downloadedBytes / item.totalBytes;
         
-        // Log solo en puntos clave para no spammear
-        final percent = (item.progress * 100).round();
-        if (percent % 10 == 0 && item.status == DownloadStatus.downloading) {
-          item.addLog('⬇️ ${item.formattedProgress} at ${item.formattedSpeed}');
+        // Convertir a cadena para asegurar que capturamos cambios decimales
+        final newProgressStr = item.formattedProgress;
+        final oldProgressStr = (oldProgress * 100).toStringAsFixed(1) + '%';
+        
+        // Mostrar log para cada cambio en el progreso, incluso decimales
+        if (newProgressStr != oldProgressStr) {
+          // Usar icono simple
+          item.addLog('📥 $newProgressStr');
         }
       }
 
@@ -289,32 +298,54 @@ class DownloadService {
     }
   }
 
+  static String _calculateSHA256(Map<String, dynamic> args) {
+    final filePath = args['path'] as String;
+    final file = File(filePath);
+    
+    try {
+      final startTime = DateTime.now();
+      final fileSize = file.lengthSync();
+      print('Starting SHA-256 calculation for $filePath ($fileSize bytes)');
+      
+      // Leer archivo y calcular hash de una vez
+      final bytes = file.readAsBytesSync();
+      final digest = sha256.convert(bytes);
+      
+      final duration = DateTime.now().difference(startTime);
+      print('SHA-256 calculation completed in ${duration.inSeconds}.${duration.inMilliseconds % 1000}s');
+      
+      return digest.toString();
+    } catch (e) {
+      print('Error calculating checksum: $e');
+      return 'Error: $e';
+    }
+  }
+
   Future<void> _verifyChecksum(DownloadItem item) async {
     try {
-      item.addLog('🔍 Verifying file integrity...');
+      item.addLog('🔍 Starting file integrity verification...');
       _downloadController.add(item);
       
-      // Ejecutar cálculo en otro thread
-      final checksum = await compute(_calculateSHA256, {
-        'path': '${Platform.environment['HOME']}/Downloads/${item.filename}'
-      });
+      // Iniciar cálculo
+      final start = DateTime.now();
+      item.addLog('🧮 Calculating SHA-256 checksum...');
+      _downloadController.add(item);
       
-      // Actualizar item con resultado
+      final path = '${Platform.environment['HOME']}/Downloads/${item.filename}';
+      final checksum = await compute(_calculateSHA256, {'path': path});
+      
+      // Registrar resultado
+      final duration = DateTime.now().difference(start);
       item.checksum = checksum;
-      item.addLog('✅ Checksum: $checksum');
+      item.addLog('✅ Checksum verified in ${duration.inSeconds}s');
+      item.addLog('🔐 SHA-256: $checksum');
       _downloadController.add(item);
+      
     } catch (e) {
       print('Error verifying checksum: $e');
       item.addLog('⚠️ Could not verify checksum: $e');
       _downloadController.add(item);
     }
-  }
-
-  // Método estático para poder usar compute()
-  static String _calculateSHA256(Map<String, dynamic> args) {
-    final file = File(args['path']);
-    final bytes = file.readAsBytesSync();
-    return sha256.convert(bytes).toString();
   }
 
   void _handleErrorMessage(Map<String, dynamic> data) {

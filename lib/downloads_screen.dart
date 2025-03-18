@@ -271,21 +271,24 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(color: accent.withOpacity(0.2)),
               ),
-              constraints: BoxConstraints(
-                maxHeight: 120,  // Más alto para mostrar más logs
-                minHeight: 60,   // Altura mínima para que siempre se vea bien
+              constraints: const BoxConstraints(
+                maxHeight: 150,  // Más alto para mostrar más logs
+                minHeight: 80,  // Altura mínima para que siempre se vea bien
               ),
               child: ListView.builder(
                 reverse: true,
                 itemCount: download.logs.length,
+                padding: EdgeInsets.zero,
+                itemExtent: 18.0, // Altura fija por elemento para scroll uniforme
                 itemBuilder: (_, i) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  padding: const EdgeInsets.symmetric(vertical: 1),
                   child: Text(
                     download.logs[download.logs.length - i - 1],
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontFamily: 'monospace',
                       fontSize: 11,
-                      color: Colors.grey[400],
+                      color: Colors.white70,
+                      height: 1.2,
                     ),
                   ),
                 ),

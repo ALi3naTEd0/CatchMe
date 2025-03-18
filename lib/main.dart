@@ -16,18 +16,38 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Definir el color una vez para usarlo en toda la app
+    final accentColor = Colors.blue[300] ?? Colors.blue;
+
     return MaterialApp(
       title: 'CatchMe',
       theme: ThemeData(
         colorScheme: ColorScheme.dark(
-          primary: Colors.blue,      // Cambiar a azul
-          secondary: Colors.blue.withOpacity(0.7),
+          primary: accentColor,      // Color unificado
+          secondary: accentColor.withOpacity(0.7),
           surface: const Color(0xFF1E1E1E),
           background: const Color(0xFF121212),
           onPrimary: Colors.white,
         ),
         cardTheme: const CardTheme(
-          color: Color(0xFF2A2A2A),              // Fondo de cards más oscuro
+          color: Color(0xFF2A2A2A),
+        ),
+        navigationRailTheme: NavigationRailThemeData(
+          selectedIconTheme: const IconThemeData(
+            color: Colors.white,  // Icono blanco cuando está activo
+          ),
+          selectedLabelTextStyle: TextStyle(
+            color: accentColor,   // Usar el mismo accentColor
+            fontWeight: FontWeight.bold,
+          ),
+          unselectedIconTheme: IconThemeData(
+            color: Colors.grey[600],  // Icono gris cuando está inactivo
+          ),
+          unselectedLabelTextStyle: TextStyle(
+            color: Colors.grey[600],  // Texto gris cuando está inactivo
+          ),
+          backgroundColor: Colors.transparent,
+          indicatorColor: accentColor,  // Color del indicador seleccionado
         ),
         useMaterial3: true,
       ),
@@ -95,11 +115,12 @@ class _MainScreenState extends State<MainScreen> {
                 color: isRunning ? Colors.green : Colors.red,
               ),
             ),
-            SizedBox(width: 8),
+            const SizedBox(width: 8),
             Text(
               isRunning ? 'Server Running' : 'Server Stopped',
               style: TextStyle(
                 fontSize: 12,
+                fontWeight: FontWeight.bold, // Texto en negrita
                 color: isRunning ? Colors.green : Colors.red,
               ),
             ),
@@ -167,6 +188,7 @@ class _MainScreenState extends State<MainScreen> {
                         'Disconnected',
                         style: TextStyle(
                           fontSize: 12,
+                          fontWeight: FontWeight.bold, // Texto en negrita
                           color: Colors.orange,
                         ),
                       ),

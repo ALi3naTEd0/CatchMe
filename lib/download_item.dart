@@ -78,7 +78,11 @@ class DownloadItem {
 
   void addLog(String message) {
     final timestamp = DateTime.now();
-    final time = '${timestamp.hour}:${timestamp.minute}:${timestamp.second}';
+    // Formatear hora con padding para asegurar siempre 2 dígitos
+    final hours = timestamp.hour.toString().padLeft(2, '0');
+    final minutes = timestamp.minute.toString().padLeft(2, '0');
+    final seconds = timestamp.second.toString().padLeft(2, '0');
+    final time = '$hours:$minutes:$seconds';
     logs.add('[$time] $message');
   }
 

@@ -8,6 +8,7 @@ import (
     "net/http"
     "os"
     "path/filepath"
+    "sync"
     "time"
     "github.com/gorilla/websocket"
 )
@@ -16,11 +17,31 @@ var upgrader = websocket.Upgrader{
     CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-func handleDownload(conn *websocket.Conn, url string) {
+// Mutex para sincronizar escrituras al websocket
+type SafeConn struct {
+    conn *websocket.Conn
+    mu   sync.Mutex
+}
+
+// SendJSON envía un mensaje JSON de forma segura
+func (sc *SafeConn) SendJSON(v interface{}) error {
+    sc.mu.Lock()
+    defer sc.mu.Unlock()
+    return sc.conn.WriteJSON(v)
+}
+
+// SendText envía un mensaje de texto de forma segura
+func (sc *SafeConn) SendText(message string) error {
+    sc.mu.Lock()
+    defer sc.mu.Unlock()
+    return sc.conn.WriteMessage(websocket.TextMessage, []byte(message))
+}
+
+func handleDownload(safeConn *SafeConn, url string) {
     log.Printf("Starting download: %s", url)
 
     // Enviar confirmación inicial al cliente
-    sendMessage(conn, "log", url, "Starting download process...")
+    sendMessage(safeConn, "log", url, "Starting download process...")
 
     // Simple client without timeout that could break the connection
     client := &http.Client{}
@@ -29,20 +50,20 @@ func handleDownload(conn *websocket.Conn, url string) {
     resp, err := client.Head(url)
     if err != nil {
         log.Printf("Error getting file info for %s: %v", url, err)
-        sendMessage(conn, "error", url, fmt.Sprintf("Error getting file info: %v", err))
+        sendMessage(safeConn, "error", url, fmt.Sprintf("Error getting file info: %v", err))
         return
     }
 
     totalSize := resp.ContentLength
     filename := filepath.Base(url)
     
-    sendMessage(conn, "log", url, fmt.Sprintf("File size: %d bytes", totalSize))
+    sendMessage(safeConn, "log", url, fmt.Sprintf("File size: %d bytes", totalSize))
 
     // Asegurar que el directorio de descargas existe
     home, err := os.UserHomeDir()
     if err != nil {
         log.Printf("Error getting home directory: %v", err)
-        sendMessage(conn, "error", url, "Could not determine download location")
+        sendMessage(safeConn, "error", url, "Could not determine download location")
         return
     }
     
@@ -50,11 +71,11 @@ func handleDownload(conn *websocket.Conn, url string) {
     savePath := filepath.Join(downloadDir, filename)
     
     // Iniciar la descarga real
-    sendMessage(conn, "log", url, "Starting download...")
+    sendMessage(safeConn, "log", url, "Starting download...")
     resp, err = client.Get(url)
     if err != nil {
         log.Printf("Download error for %s: %v", url, err)
-        sendMessage(conn, "error", url, fmt.Sprintf("Download error: %v", err))
+        sendMessage(safeConn, "error", url, fmt.Sprintf("Download error: %v", err))
         return
     }
     defer resp.Body.Close()
@@ -63,7 +84,7 @@ func handleDownload(conn *websocket.Conn, url string) {
     file, err := os.Create(savePath)
     if err != nil {
         log.Printf("Error creating file %s: %v", savePath, err)
-        sendMessage(conn, "error", url, fmt.Sprintf("Error creating file: %v", err))
+        sendMessage(safeConn, "error", url, fmt.Sprintf("Error creating file: %v", err))
         return
     }
     defer file.Close()
@@ -75,7 +96,7 @@ func handleDownload(conn *websocket.Conn, url string) {
     lastUpdate := time.Now()
     
     // Enviar estado inicial
-    sendProgress(conn, url, downloaded, totalSize, 0)
+    sendProgress(safeConn, url, downloaded, totalSize, 0)
 
     // Loop de descarga con mejor manejo de errores
     for {
@@ -85,7 +106,7 @@ func handleDownload(conn *websocket.Conn, url string) {
             _, writeErr := file.Write(buffer[:n])
             if writeErr != nil {
                 log.Printf("Error writing to file %s: %v", savePath, writeErr)
-                sendMessage(conn, "error", url, fmt.Sprintf("Write error: %v", writeErr))
+                sendMessage(safeConn, "error", url, fmt.Sprintf("Write error: %v", writeErr))
                 return
             }
             
@@ -97,7 +118,7 @@ func handleDownload(conn *websocket.Conn, url string) {
             elapsedSeconds := time.Since(startTime).Seconds()
             speed := float64(downloaded) / elapsedSeconds
             
-            sendProgress(conn, url, downloaded, totalSize, speed)
+            sendProgress(safeConn, url, downloaded, totalSize, speed)
             lastUpdate = time.Now()
         }
         
@@ -109,7 +130,7 @@ func handleDownload(conn *websocket.Conn, url string) {
             }
             
             log.Printf("Error reading from response for %s: %v", url, err)
-            sendMessage(conn, "error", url, fmt.Sprintf("Read error: %v", err))
+            sendMessage(safeConn, "error", url, fmt.Sprintf("Read error: %v", err))
             return
         }
     }
@@ -117,31 +138,31 @@ func handleDownload(conn *websocket.Conn, url string) {
     // Verificar si la descarga está completa
     if totalSize > 0 && downloaded != totalSize {
         log.Printf("Download incomplete for %s: got %d bytes, expected %d", url, downloaded, totalSize)
-        sendMessage(conn, "error", url, fmt.Sprintf("Download incomplete: got %d bytes, expected %d", downloaded, totalSize))
+        sendMessage(safeConn, "error", url, fmt.Sprintf("Download incomplete: got %d bytes, expected %d", downloaded, totalSize))
         return
     }
 
     // Enviar confirmación de completado
     log.Printf("Download completed: %s (%d bytes)", filename, downloaded)
-    sendMessage(conn, "log", url, fmt.Sprintf("Download completed: %d bytes", downloaded))
-    sendProgress(conn, url, downloaded, totalSize, 0, "completed")
+    sendMessage(safeConn, "log", url, fmt.Sprintf("Download completed: %d bytes", downloaded))
+    sendProgress(safeConn, url, downloaded, totalSize, 0, "completed")
 }
 
 // Función mejorada para enviar mensajes
-func sendMessage(conn *websocket.Conn, msgType, url, message string) {
+func sendMessage(safeConn *SafeConn, msgType, url, message string) {
     data := map[string]interface{}{
         "type": msgType,
         "url": url,
         "message": message,
     }
     
-    if err := conn.WriteJSON(data); err != nil {
+    if err := safeConn.SendJSON(data); err != nil {
         log.Printf("Error sending message to client: %v", err)
     }
 }
 
 // Función mejorada para enviar progreso
-func sendProgress(conn *websocket.Conn, url string, bytesReceived, totalBytes int64, speed float64, status ...string) {
+func sendProgress(safeConn *SafeConn, url string, bytesReceived, totalBytes int64, speed float64, status ...string) {
     downloadStatus := "downloading"
     if len(status) > 0 {
         downloadStatus = status[0]
@@ -156,7 +177,7 @@ func sendProgress(conn *websocket.Conn, url string, bytesReceived, totalBytes in
         "status": downloadStatus,
     }
     
-    if err := conn.WriteJSON(data); err != nil {
+    if err := safeConn.SendJSON(data); err != nil {
         log.Printf("Error sending progress to client: %v", err)
     }
 }
@@ -170,12 +191,20 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
         log.Printf("Error upgrading connection: %v", err)
         return
     }
-    defer conn.Close()
+    
+    // Crear conexión segura con mutex
+    safeConn := &SafeConn{conn: conn}
     
     // Configuración sin timeouts para evitar desconexiones
     conn.SetReadDeadline(time.Time{})
     
     log.Printf("Client connected: %s", r.RemoteAddr)
+    
+    // Cleanup al finalizar
+    defer func() {
+        conn.Close()
+        log.Printf("Client disconnected: %s", r.RemoteAddr)
+    }()
     
     // Manejar mensajes
     for {
@@ -202,13 +231,13 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
         case "start_download":
             if url, ok := msg["url"].(string); ok {
                 log.Printf("Download request for: %s", url)
-                go handleDownload(conn, url)
+                go handleDownload(safeConn, url)
             } else {
                 log.Printf("Invalid download request, missing URL")
             }
         case "ping":
             // Responder a pings para mantener la conexión viva
-            conn.WriteJSON(map[string]string{"type": "pong"})
+            safeConn.SendJSON(map[string]string{"type": "pong"})
         default:
             log.Printf("Unhandled message type: %v", msg["type"])
         }
