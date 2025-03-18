@@ -7,8 +7,8 @@
 - Real-time download progress tracking
 - Enhanced download statistics (speed, ETA, average speed)
 - Live download logs with formatted timestamps
-- SHA-256 file verification
-- Pause/Resume functionality
+- Server-side SHA-256 file verification
+- Full support for pause/resume with chunked downloads
 - Auto-retry mechanism with exponential backoff
 - Multi-connection chunked downloads
 - WebSocket-based communication between UI and server
@@ -18,6 +18,7 @@
 - Chunk visualization during downloads
 - Improved error recovery logic
 - More robust server restart handling
+- High-performance server-side checksum calculation
 
 ### Enhanced
 - Responsive layout support for all screen sizes
@@ -34,6 +35,10 @@
 - Faster download speeds with multi-connection downloads
 - More detailed error and status reporting
 - Better progress tracking for large files
+- Increased buffer sizes for improved performance
+- Better handling of slow connections
+- Improved HTTP range request support
+- More efficient resource usage on server
 
 ### Fixed
 - Server-client synchronization for canceled downloads
@@ -49,6 +54,9 @@
 - Unexpected download termination
 - Retry mechanism failures
 - Connection handling after network interruptions
+- Corrupted code in Go server files
+- Buffer sizing issues affecting performance
+- SHA-256 calculation errors and performance issues
 
 ### Technical
 - Implemented singleton pattern for services
@@ -67,6 +75,9 @@
 - Range request support for partial downloads
 - Multi-connection concurrent downloads
 - Reliable server cleanup on exit
+- Server-side SHA-256 calculation
+- Optimized buffer sizes for improved performance
+- Enhanced chunk management and tracking
 
 ### Infrastructure
 - Project documentation updated
