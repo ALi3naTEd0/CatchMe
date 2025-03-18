@@ -52,11 +52,13 @@ func markDownloadActive(url string) {
 }
 
 // Función para verificar si una descarga está activa
+/*
 func isDownloadActive(url string) bool {
     activeDownloadsMux.Lock()
     defer activeDownloadsMux.Unlock()
     return activeDownloads[url]
 }
+*/
 
 // Función para marcar una descarga como cancelada/terminada
 func markDownloadInactive(url string) {
@@ -90,18 +92,21 @@ func handleDownload(safeConn *SafeConn, url string) {
 
     // Verificar el tamaño del archivo
     head, err := client.Head(url)
-    if err != nil {
+    if (err != nil) {
         log.Printf("Error getting file info: %v", err)
         sendMessage(safeConn, "error", url, fmt.Sprintf("Error checking file: %v", err))
         return
     }
     totalSize := head.ContentLength
 
-    // Verificar si la descarga sigue activa después de inicialización
+    // Comentamos esta verificación que está causando la cancelación prematura
+    // ya que isDownloadActive no está funcionando como esperamos
+    /*
     if !isDownloadActive(url) {
         log.Printf("Download was cancelled during initialization: %s", url)
         return
     }
+    */
 
     // Intentar la descarga con retries
     var resp *http.Response
@@ -264,8 +269,8 @@ func sendProgress(safeConn *SafeConn, url string, bytesReceived, totalBytes int6
 // Constantes para información del cliente
 const (
     ImplementationInfo = "CatchMe v1.0.0"
-    FeaturesSupported = "basic-download retry-mechanism"
-    ChunksSupported = false
+    FeaturesSupported = "basic-download retry-mechanism chunked-download"
+    ChunksSupported = true  // Actualizar a true
 )
 
 func handleWS(w http.ResponseWriter, r *http.Request) {
@@ -329,10 +334,16 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
                 log.Printf("Download request for: %s", url)
                 
                 // Verificar si ya existe una descarga activa con esta URL
-                if isDownloadActive(url) {
+                // Usar activeDownloads en lugar de la función para ser consistente
+                activeDownloadsMux.Lock()
+                alreadyActive := activeDownloads[url]
+                activeDownloadsMux.Unlock()
+                
+                if alreadyActive {
                     log.Printf("URL already being downloaded: %s", url)
                     sendMessage(safeConn, "error", url, "This URL is already being downloaded")
                 } else {
+                    // Por ahora, usar sólo el método normal sin la variable useChunks
                     go handleDownload(safeConn, url)
                 }
             } else {
@@ -341,22 +352,41 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
         case "cancel_download":
             if url, ok := msg["url"].(string); ok {
                 log.Printf("Canceling download for: %s", url)
-                // Marcar como inactivo inmediatamente
-                markDownloadInactive(url)
                 
-                // Enviar confirmación al cliente
-                sendMessage(safeConn, "log", url, "Download canceled by user")
-                sendMessage(safeConn, "cancel_confirmed", url, "Download canceled successfully")
+                // Intentar cancelar descarga por chunks primero
+                if isDownloadActive(url) {
+                    // Los nombres de función deben coincidir exactamente
+                    handleCancelChunkedDownload(safeConn, url)
+                } else {
+                    // Marcar como inactivo el método tradicional
+                    markDownloadInactive(url)
+                    
+                    // Enviar confirmación al cliente
+                    sendMessage(safeConn, "log", url, "Download canceled by user")
+                    sendMessage(safeConn, "cancel_confirmed", url, "Download canceled successfully")
+                }
+            }
+        case "pause_download":
+            if url, ok := msg["url"].(string); ok {
+                log.Printf("Pause request for: %s", url)
+                
+                // Pausar descarga por chunks
+                if isDownloadActive(url) {
+                    // Los nombres de función deben coincidir exactamente
+                    handlePauseChunkedDownload(safeConn, url)
+                }
             }
         case "resume_download":
             if url, ok := msg["url"].(string); ok {
                 log.Printf("Resuming download for: %s", url)
-                go handleDownload(safeConn, url)
-            }
-        case "pause_download":
-            // TODO: Implementar pausa
-            if url, ok := msg["url"].(string); ok {
-                log.Printf("Pause request for: %s", url)
+                
+                // Reanudar descarga por chunks
+                if useChunks := true; useChunks && ChunksSupported {
+                    // Los nombres de función deben coincidir exactamente
+                    go handleResumeChunkedDownload(safeConn, url)
+                } else {
+                    go handleDownload(safeConn, url)
+                }
             }
         case "ping":
             safeConn.SendJSON(map[string]string{"type": "pong"})

@@ -87,19 +87,20 @@ class _MainScreenState extends State<MainScreen> {
     });
 
     try {
+      // Iniciar el servidor backend
       await ServerLauncher().startServer();
       
       setState(() {
         _statusMessage = 'Connecting to server...';
       });
 
-      // Intentar conectar con timeout
+      // Intentar conectar con timeout, con más intentos para asegurar conexión
       bool connected = false;
-      for (int i = 0; i < 3 && !connected; i++) {
+      for (int i = 0; i < 5 && !connected; i++) {
         try {
           await Future.delayed(Duration(seconds: 1));
           setState(() {
-            _statusMessage = 'Connecting to server (attempt ${i + 1}/3)...';
+            _statusMessage = 'Connecting to server (attempt ${i + 1}/5)...';
           });
           
           // Verificar si el servidor está corriendo
@@ -119,6 +120,7 @@ class _MainScreenState extends State<MainScreen> {
 
       setState(() {
         _serverStarted = true;
+        _statusMessage = 'Server connected successfully';
       });
     } catch (e) {
       setState(() {

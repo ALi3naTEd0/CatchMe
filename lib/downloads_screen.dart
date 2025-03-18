@@ -35,52 +35,71 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   }
 
   void _showAddDownloadDialog(BuildContext context) {
+    bool useChunks = true; // por defecto activado
+    
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('New Download'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _urlController,
-              decoration: const InputDecoration(
-                labelText: 'URL',
-                hintText: 'https://example.com/file.zip',
-                border: OutlineInputBorder(),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('New Download'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _urlController,
+                decoration: const InputDecoration(
+                  labelText: 'URL',
+                  hintText: 'https://example.com/file.zip',
+                  border: OutlineInputBorder(),
+                ),
+                autofocus: true,
+                onSubmitted: (url) {
+                  Navigator.of(context).pop();
+                  _startDownload(context, url, useChunks);
+                },
               ),
-              autofocus: true,
-              onSubmitted: (url) {
-                Navigator.of(context).pop();
-                _startDownload(context, url);
+              const SizedBox(height: 16),
+              // Opción para usar chunks
+              SwitchListTile(
+                title: const Text('Use chunked download'),
+                subtitle: Text(
+                  'Download file in multiple parallel connections',
+                  style: TextStyle(fontSize: 12),
+                ),
+                value: useChunks,
+                onChanged: (value) {
+                  setState(() {
+                    useChunks = value;
+                  });
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final url = _urlController.text;
+                if (url.isNotEmpty) {
+                  Navigator.of(context).pop();
+                  _startDownload(context, url, useChunks);
+                }
               },
+              child: const Text('Download'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final url = _urlController.text;
-              if (url.isNotEmpty) {
-                Navigator.of(context).pop();
-                _startDownload(context, url);
-              }
-            },
-            child: const Text('Download'),
-          ),
-        ],
       ),
     );
   }
 
-  void _startDownload(BuildContext context, String url) {
-    print('Attempting to start download: $url');
+  void _startDownload(BuildContext context, String url, [bool useChunks = true]) {
+    print('Attempting to start download: $url (Chunks: $useChunks)');
     try {
-      _downloadService.startDownload(url).catchError((error) {
+      _downloadService.startDownload(url, useChunks: useChunks).catchError((error) {
         // Mostrar error en SnackBar para mejorar UX
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: ${error.toString()}')),
@@ -387,12 +406,111 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                           ),
                         ),
                   ),
+                
+                // Agregar visualización de chunks si están disponibles
+                if (download.chunks.isNotEmpty && download.status == DownloadStatus.downloading)
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[900],
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: accent.withOpacity(0.2)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Download Chunks', style: TextStyle(fontWeight: FontWeight.bold)),
+                        SizedBox(height: 8),
+                        ...download.chunks.values.map((chunk) => 
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 24,
+                                  child: Text('#${chunk.id + 1}', style: TextStyle(fontSize: 10)),
+                                ),
+                                Expanded(
+                                  child: LinearProgressIndicator(
+                                    value: chunk.end > chunk.start
+                                      ? chunk.progress / (chunk.end - chunk.start + 1)
+                                      : 0.0,
+                                    backgroundColor: Colors.grey[800],
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      _getChunkColor(chunk.status, accent)
+                                    ),
+                                    minHeight: 8,
+                                  ),
+                                ),
+                                SizedBox(width: 8),
+                                Text(
+                                  _getChunkStatusText(chunk),
+                                  style: TextStyle(fontSize: 10),
+                                ),
+                              ],
+                            ),
+                          )
+                        ).toList(),
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),
         ],
       ),
     );
+  }
+
+  Color _getChunkColor(String status, Color defaultColor) {
+    switch (status) {
+      case 'pending':
+        return Colors.grey;
+      case 'active':
+        return defaultColor;
+      case 'completed':
+        return Colors.green;
+      case 'failed':
+        return Colors.red;
+      case 'paused':
+        return Colors.orange;
+      default:
+        return defaultColor;
+    }
+  }
+
+  String _getChunkStatusText(ChunkInfo chunk) {
+    switch (chunk.status) {
+      case 'pending':
+        return 'Pending';
+      case 'active':
+        final progress = ((chunk.progress * 100) / (chunk.end - chunk.start + 1)).toStringAsFixed(0);
+        return '$progress% @ ${_formatSpeed(chunk.speed)}';
+      case 'completed':
+        return 'Complete';
+      case 'failed':
+        return 'Failed';
+      case 'paused':
+        return 'Paused';
+      default:
+        return chunk.status;
+    }
+  }
+
+  String _formatSpeed(double bytesPerSecond) {
+    if (bytesPerSecond <= 0) return '0 B/s';
+    
+    const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+    int unitIndex = 0;
+    double value = bytesPerSecond;
+    
+    while (value > 1024 && unitIndex < units.length - 1) {
+      value /= 1024;
+      unitIndex++;
+    }
+    
+    return '${value.toStringAsFixed(1)} ${units[unitIndex]}';
   }
 
   Widget _buildStat({

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:math';
+import 'download_service.dart';  // Solo para ChunkInfo
 
 enum DownloadStatus { queued, downloading, completed, paused, error }
 
@@ -16,6 +17,9 @@ class DownloadItem {
   final DateTime startTime;
   String? checksum;  // Añadir campo para guardar el SHA
   List<String> logs = [];  // Añadir logs de la descarga
+
+  // Mapa para almacenar información de chunks
+  final Map<int, dynamic> chunks = {};
 
   // Historial de velocidades para calcular promedio
   static const int _maxHistoryEntries = 50;  // Aumentar historial

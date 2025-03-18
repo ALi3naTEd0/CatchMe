@@ -13,6 +13,76 @@ import 'download_item.dart';
 import 'download_progress.dart';
 import 'websocket_connector.dart';
 
+// Define modelo para información de chunks
+class ChunkInfo {
+  final int id;
+  final int start;
+  final int end;
+  final String status;
+  final int progress;
+  final double speed;
+  final int completed;
+
+  ChunkInfo({
+    required this.id,
+    required this.start,
+    required this.end,
+    required this.status,
+    this.progress = 0,
+    this.speed = 0.0,
+    this.completed = 0,
+  });
+
+  factory ChunkInfo.fromJson(Map<String, dynamic> json) {
+    return ChunkInfo(
+      id: json['id'] as int,
+      start: json['start'] as int,
+      end: json['end'] as int,
+      status: json['status'] as String,
+      progress: json['progress'] as int? ?? 0,
+      speed: (json['speed'] as num?)?.toDouble() ?? 0.0,
+      completed: json['completed'] as int? ?? 0,
+    );
+  }
+
+  double get progressPercentage => end > start ? progress / (end - start + 1) : 0.0;
+}
+
+// Extension para añadir funcionalidad de chunks a DownloadItem
+extension DownloadItemExtensions on DownloadItem {
+  // Método para actualizar un chunk
+  void updateChunk(ChunkInfo chunkInfo) {
+    chunks[chunkInfo.id] = chunkInfo;
+  }
+  
+  // Método para calcular progreso basado en chunks
+  String getProgressFromChunks() {
+    if (chunks.isNotEmpty) {
+      double totalChunkSize = 0; // Changed to double
+      double completedBytes = 0; // Changed to double
+      
+      for (final chunk in chunks.values) {
+        final chunkSize = (chunk.end - chunk.start + 1).toDouble(); // Convert to double
+        totalChunkSize += chunkSize;
+        
+        if (chunk.status == 'completed') {
+          completedBytes += chunkSize;
+        } else {
+          completedBytes += chunk.progress.toDouble(); // Convert to double
+        }
+      }
+      
+      final percentage = totalChunkSize > 0 
+          ? completedBytes / totalChunkSize
+          : progress;
+          
+      return '${(percentage * 100).toStringAsFixed(1)}%';
+    }
+    
+    return '${(progress * 100).toStringAsFixed(1)}%';
+  }
+}
+
 class DownloadService {
   static final DownloadService _instance = DownloadService._internal();
   factory DownloadService() => _instance;
@@ -37,6 +107,23 @@ class DownloadService {
   // Agregar un conjunto para rastrear URLs canceladas recientemente
   final Set<String> _recentlyCancelled = {};
   final _recentCancelDuration = Duration(seconds: 10);
+
+  // Utilidades de formato
+  String _formatSpeed(double bytesPerSecond) {
+    if (!bytesPerSecond.isFinite || bytesPerSecond <= 0) return '0 B/s';
+    return '${_formatBytes(bytesPerSecond)}/s';
+  }
+
+  String _formatBytes(double bytes) {
+    if (!bytes.isFinite || bytes <= 0) return '0 B';
+    const suffixes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var i = 0;
+    while (bytes >= 1024 && i < suffixes.length - 1) {
+      bytes /= 1024;
+      i++;
+    }
+    return '${bytes.toStringAsFixed(1)} ${suffixes[i]}';
+  }
 
   Future<void> init() async {
     if (_downloadController.isClosed) {
@@ -92,6 +179,12 @@ class DownloadService {
           case 'server_info':
             _handleServerInfo(data);
             break;
+          case 'chunk_init':
+            _handleChunkInit(data);
+            break;
+          case 'chunk_progress':
+            _handleChunkProgress(data);
+            break;
           case 'pong':
             if (kDebugMode) print('Pong received from server');
             break;
@@ -117,7 +210,7 @@ class DownloadService {
     }
   }
 
-  Future<void> startDownload(String url) async {
+  Future<void> startDownload(String url, {bool useChunks = true}) async {
     try {
       if (!_isConnected) {
         await _connector.connect();
@@ -153,7 +246,8 @@ class DownloadService {
       // Enviar solicitud al servidor
       _connector.send({
         'type': 'start_download',
-        'url': url
+        'url': url,
+        'use_chunks': useChunks  // Añadir parámetro para usar chunks
       });
 
     } catch (e) {
@@ -485,6 +579,58 @@ class DownloadService {
     print('- Features: ${data['features']}');
     print('- Chunks supported: ${data['chunks_supported']}');
     
-    // Aquí podríamos guardar esta información para adaptar la UI
+    final chunksSupported = data['chunks_supported'] as bool? ?? false;
+    if (chunksSupported) {
+      print('✅ Server supports chunked downloads');
+    } else {
+      print('⚠️ Server does not support chunked downloads');
+    }
+  }
+
+  // Añadir manejadores para mensajes relacionados con chunks
+  void _handleChunkInit(Map<String, dynamic> data) {
+    final url = data['url'] as String;
+    final chunkData = data['chunk'] as Map<String, dynamic>;
+    
+    // Ignorar si la URL está en la lista de canceladas
+    if (_recentlyCancelled.contains(url)) {
+      print('Ignoring chunk init for cancelled download: $url');
+      return;
+    }
+    
+    final item = _downloads[url];
+    if (item == null) return;
+    
+    final chunk = ChunkInfo.fromJson(chunkData);
+    item.updateChunk(chunk);
+    
+    item.addLog('🧩 Chunk ${chunk.id+1}: ${_formatBytes((chunk.end - chunk.start + 1).toDouble())} bytes');
+    _downloadController.add(item);
+  }
+
+  void _handleChunkProgress(Map<String, dynamic> data) {
+    final url = data['url'] as String;
+    final chunkData = data['chunk'] as Map<String, dynamic>;
+    
+    // Ignorar si la URL está en la lista de canceladas
+    if (_recentlyCancelled.contains(url)) {
+      print('Ignoring chunk progress for cancelled download: $url');
+      return;
+    }
+    
+    final item = _downloads[url];
+    if (item == null) return;
+    
+    final chunk = ChunkInfo.fromJson(chunkData);
+    item.updateChunk(chunk);
+    
+    // Añadir log solo para cambios significativos
+    if (chunk.progress > 0 && chunk.progress % (1024*1024) < 1024*10) { // Cada ~1MB
+      final chunkProgress = (chunk.progress * 100 / (chunk.end - chunk.start + 1)).toStringAsFixed(0);
+      item.addLog('🧩 Chunk ${chunk.id+1}: $chunkProgress% at ${_formatSpeed(chunk.speed)}');
+    }
+    
+    // Actualizar UI
+    _downloadController.add(item);
   }
 }
