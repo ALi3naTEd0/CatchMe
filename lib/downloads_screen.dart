@@ -407,8 +407,8 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                         ),
                   ),
                 
-                // Visualización mejorada de chunks
-                if (download.chunks.isNotEmpty && download.status == DownloadStatus.downloading)
+                // Visualización mejorada de chunks - SIEMPRE mostrar si hay chunks, no solo durante la descarga
+                if (download.chunks.isNotEmpty)
                   Container(
                     margin: const EdgeInsets.only(top: 16),
                     padding: const EdgeInsets.all(8),
@@ -427,40 +427,50 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                             style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                           ),
                         ),
-                        // Mostrar chunks con más actividad
-                        ...download.chunks.values.toList().take(5).map((chunk) => 
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 24,
-                                  child: Text('#${chunk.id + 1}', style: TextStyle(fontSize: 10)),
-                                ),
-                                Expanded(
-                                  child: LinearProgressIndicator(
-                                    value: chunk.progressPercentage,
-                                    backgroundColor: Colors.grey[800],
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      _getChunkColor(chunk.status, accent)
-                                    ),
-                                    minHeight: 8,
-                                  ),
-                                ),
-                                SizedBox(width: 8),
-                                Text(
-                                  _getChunkStatusText(chunk),
-                                  style: TextStyle(fontSize: 10),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ).toList(),
+                        // Mostrar chunks con más actividad - Ordenar por estado, mostrando activos primero
+                        ...download.chunks.values.toList()
+                          .where((c) => c.status != 'completed') // Mostrar primero chunks no completados
+                          .take(3) // Mostrar máximo 3 chunks activos
+                          .map((chunk) => _buildChunkProgressItem(chunk, accent))
+                          .followedBy(download.chunks.values.toList()
+                            .where((c) => c.status == 'completed') // Luego mostrar completados
+                            .take(2) // Mostrar máximo 2 chunks completados
+                            .map((chunk) => _buildChunkProgressItem(chunk, accent)))
+                          .take(5) // Limitar a total 5 chunks
+                          .toList(),
                       ],
                     ),
                   ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Extraer widget para chunk para hacerlo más limpio
+  Widget _buildChunkProgressItem(dynamic chunk, Color accent) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Container(
+            width: 24,
+            child: Text('#${chunk.id + 1}', style: TextStyle(fontSize: 10)),
+          ),
+          Expanded(
+            child: LinearProgressIndicator(
+              value: chunk.progressPercentage,
+              backgroundColor: Colors.grey[800],
+              valueColor: AlwaysStoppedAnimation<Color>(_getChunkColor(chunk.status, accent)),
+              minHeight: 8,
+            ),
+          ),
+          SizedBox(width: 8),
+          Text(
+            _getChunkStatusText(chunk),
+            style: TextStyle(fontSize: 10),
           ),
         ],
       ),
@@ -573,8 +583,10 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
 
   void _toggleDownload(DownloadItem download) {
     if (download.status == DownloadStatus.downloading) {
+      print('UI: Pausing download: ${download.url}');
       _downloadService.pauseDownload(download.url);
-    } else {
+    } else if (download.status == DownloadStatus.paused) {
+      print('UI: Resuming download: ${download.url}');
       _downloadService.resumeDownload(download.url);
     }
   }

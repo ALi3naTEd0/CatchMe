@@ -13,16 +13,62 @@ class CompletedScreen extends StatefulWidget {
 }
 
 class _CompletedScreenState extends State<CompletedScreen> {
+  // Crear una lista local de descargas completadas para mantenerlas
+  final List<DownloadItem> _completedDownloads = [];
   final _downloadService = DownloadService();
 
   @override
-  Widget build(BuildContext context) {
-    // Filtrar solo descargas completadas
-    final completedDownloads = _downloadService.downloads
+  void initState() {
+    super.initState();
+    // Inicializar con descargas completadas existentes
+    _updateCompletedDownloads();
+    
+    // Escuchar a nuevas descargas completadas
+    _downloadService.downloadStream.listen((download) {
+      if (download.status == DownloadStatus.completed) {
+        _addCompletedDownload(download);
+      }
+    });
+  }
+  
+  void _updateCompletedDownloads() {
+    // Obtener descargas ya completadas del servicio
+    final serviceCompleted = _downloadService.downloads
         .where((item) => item.status == DownloadStatus.completed)
         .toList();
+        
+    // Añadir solo las que no existan ya en nuestra lista
+    for (final download in serviceCompleted) {
+      _addCompletedDownload(download);
+    }
+  }
+  
+  void _addCompletedDownload(DownloadItem download) {
+    if (!_completedDownloads.any((item) => item.url == download.url)) {
+      setState(() {
+        // Hacer una copia del item para que no se vea afectado por cambios futuros
+        final completedDownload = DownloadItem(
+          url: download.url,
+          filename: download.filename,
+          totalBytes: download.totalBytes,
+          downloadedBytes: download.downloadedBytes,
+          status: DownloadStatus.completed,
+        );
+        completedDownload.checksum = download.checksum;
+        _completedDownloads.add(completedDownload);
+      });
+    }
+  }
+  
+  void _removeCompletedDownload(DownloadItem download) {
+    setState(() {
+      _completedDownloads.removeWhere((item) => item.url == download.url);
+    });
+  }
 
-    if (completedDownloads.isEmpty) {
+  @override
+  Widget build(BuildContext context) {
+    if (_completedDownloads.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -35,70 +81,82 @@ class _CompletedScreenState extends State<CompletedScreen> {
       );
     }
 
-    return ListView.builder(
-      itemCount: completedDownloads.length,
-      padding: EdgeInsets.all(16),
-      itemBuilder: (context, index) {
-        final download = completedDownloads[index];
-        return Card(
-          child: ListTile(
-            title: Text(download.filename),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(download.formattedSize),
-                if (download.checksum != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(Icons.verified, size: 16, color: Colors.green),
-                        SizedBox(width: 4),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'SHA-256:',
-                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                              ),
-                              Text(
-                                download.checksum!,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontFamily: 'monospace',
-                                  letterSpacing: -0.3,
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        title: const Text('Completed Downloads'),
+      ),
+      body: ListView.builder(
+        itemCount: _completedDownloads.length,
+        padding: EdgeInsets.all(16),
+        itemBuilder: (context, index) {
+          final download = _completedDownloads[index];
+          return Card(
+            child: ListTile(
+              title: Text(download.filename),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(download.formattedSize),
+                  if (download.checksum != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.verified, size: 16, color: Colors.green),
+                          SizedBox(width: 4),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'SHA-256:',
+                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                                 ),
-                                softWrap: true,
-                              ),
-                            ],
+                                Text(
+                                  download.checksum!,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontFamily: 'monospace',
+                                    letterSpacing: -0.3,
+                                  ),
+                                  softWrap: true,
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-              ],
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: Icon(Icons.folder_open),
-                  onPressed: () => _openFileLocation(download),
-                  tooltip: 'Open Downloads folder',
-                ),
-                if (download.checksum != null)
+                ],
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
                   IconButton(
-                    icon: Icon(Icons.copy),
-                    onPressed: () => _copyChecksum(download),
-                    tooltip: 'Copy checksum to clipboard',
+                    icon: Icon(Icons.folder_open),
+                    onPressed: () => _openFileLocation(download),
+                    tooltip: 'Open Downloads folder',
                   ),
-              ],
+                  if (download.checksum != null)
+                    IconButton(
+                      icon: Icon(Icons.copy),
+                      onPressed: () => _copyChecksum(download),
+                      tooltip: 'Copy checksum to clipboard',
+                    ),
+                  // Añadir botón para eliminar de la lista
+                  IconButton(
+                    icon: Icon(Icons.close, color: Colors.red[300]),
+                    onPressed: () => _removeCompletedDownload(download),
+                    tooltip: 'Remove from list',
+                  ),
+                ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 

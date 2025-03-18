@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"log"
 )
 
 // ChunkStatus representa el estado de un chunk
@@ -80,12 +81,12 @@ func NewChunkedDownload(url, filename string, size int64, chunkSize int64) *Chun
 func (d *ChunkedDownload) PrepareChunks() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-
+	
 	// Crear directorio temporal para chunks
 	if err := os.MkdirAll(d.TempDir, 0755); err != nil {
 		return fmt.Errorf("failed to create temp directory: %v", err)
 	}
-
+	
 	// Dividir el archivo en chunks
 	var chunks []*Chunk
 	for start := int64(0); start < d.Size; start += d.ChunkSize {
@@ -93,7 +94,7 @@ func (d *ChunkedDownload) PrepareChunks() error {
 		if end > d.Size-1 {
 			end = d.Size - 1
 		}
-
+		
 		chunk := &Chunk{
 			ID:        len(chunks),
 			Start:     start,
@@ -104,17 +105,20 @@ func (d *ChunkedDownload) PrepareChunks() error {
 		}
 		chunks = append(chunks, chunk)
 	}
-
+	
 	d.Chunks = chunks
 	return nil
 }
 
 // DownloadChunk descarga un chunk específico
 func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeConn *SafeConn) error {
+	// Añadir log de inicio de chunk
+	log.Printf("Starting chunk %d: bytes %d-%d", chunk.ID, chunk.Start, chunk.End)
+
 	if chunk.Status == ChunkCompleted {
 		return nil
 	}
-
+	
 	// Marcar como activo
 	chunk.mu.Lock()
 	chunk.Status = ChunkActive
@@ -156,6 +160,9 @@ func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeC
 	rangeStart := chunk.Start + chunk.Progress
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", rangeStart, chunk.End))
 
+	// Añadir User-Agent para evitar bloqueos/limitaciones
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.93 Safari/537.36")
+
 	// Iniciar descarga
 	resp, err := client.Do(req)
 	if err != nil {
@@ -186,16 +193,13 @@ func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeC
 		return err
 	}
 
-	// Descargar datos
+	// Descargar datos con menos frecuencia para reducir sobrecarga
 	startTime := time.Now()
-	buffer := make([]byte, 32*1024) // 32KB buffer
-	// Eliminar variables no utilizadas
-	// var lastUpdateTime time.Time
-	// var bytesInInterval int64
+	buffer := make([]byte, 256*1024) // Aumentar a 256KB buffer
 
 	// Monitorear progreso
 	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
+		ticker := time.NewTicker(1000 * time.Millisecond) // Cambiar a 1 segundo
 		defer ticker.Stop()
 		for {
 			select {
@@ -263,6 +267,14 @@ func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeC
 					chunk.mu.Lock()
 					chunk.Status = ChunkCompleted
 					chunk.mu.Unlock()
+
+					// Reportar estadísticas de finalización del chunk
+					elapsed := time.Since(startTime)
+					totalBytes := chunk.End - chunk.Start + 1
+					speed := float64(totalBytes) / elapsed.Seconds()
+					log.Printf("Chunk %d completed in %.2fs (%.2f MB/s)", 
+						chunk.ID, elapsed.Seconds(), speed/(1024*1024))
+
 					return nil
 				}
 				// Error de descarga

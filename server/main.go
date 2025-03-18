@@ -8,6 +8,7 @@ import (
     "net/http"
     "os"
     "path/filepath"
+    "strings"
     "sync"
     "time"
     "github.com/gorilla/websocket"
@@ -51,15 +52,6 @@ func markDownloadActive(url string) {
     log.Printf("Download tracked: %s", url)
 }
 
-// Función para verificar si una descarga está activa
-/*
-func isDownloadActive(url string) bool {
-    activeDownloadsMux.Lock()
-    defer activeDownloadsMux.Unlock()
-    return activeDownloads[url]
-}
-*/
-
 // Función para marcar una descarga como cancelada/terminada
 func markDownloadInactive(url string) {
     activeDownloadsMux.Lock()
@@ -98,15 +90,6 @@ func handleDownload(safeConn *SafeConn, url string) {
         return
     }
     totalSize := head.ContentLength
-
-    // Comentamos esta verificación que está causando la cancelación prematura
-    // ya que isDownloadActive no está funcionando como esperamos
-    /*
-    if !isDownloadActive(url) {
-        log.Printf("Download was cancelled during initialization: %s", url)
-        return
-    }
-    */
 
     // Intentar la descarga con retries
     var resp *http.Response
@@ -149,6 +132,13 @@ func handleDownload(safeConn *SafeConn, url string) {
     
     downloadDir := filepath.Join(home, "Downloads")
     savePath := filepath.Join(downloadDir, filename)
+    
+    // Crear el directorio de descargas si no existe
+    if err := os.MkdirAll(downloadDir, 0755); err != nil {
+        log.Printf("Error creating download directory: %v", err)
+        sendMessage(safeConn, "error", url, fmt.Sprintf("Error creating directory: %v", err))
+        return
+    }
     
     // Iniciar la descarga real
     sendMessage(safeConn, "log", url, "Starting download...")
@@ -333,6 +323,13 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
             if url, ok := msg["url"].(string); ok {
                 log.Printf("Download request for: %s", url)
                 
+                // Añadir diagnóstico para URL lentas comunes
+                if strings.Contains(url, "releases.ubuntu.com") || 
+                   strings.Contains(url, "cdimage.ubuntu.com") {
+                    sendMessage(safeConn, "log", url, 
+                        "⚠️ Note: Ubuntu mirrors can be slow. Consider using a mirror or torrent.")
+                }
+                
                 // Verificar si ya existe una descarga activa con esta URL
                 // Usar activeDownloads en lugar de la función para ser consistente
                 activeDownloadsMux.Lock()
@@ -368,24 +365,33 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
             }
         case "pause_download":
             if url, ok := msg["url"].(string); ok {
-                log.Printf("Pause request for: %s", url)
+                log.Printf("Pause request received for: %s", url)
                 
-                // Pausar descarga por chunks
+                // Pausar descarga
                 if isDownloadActive(url) {
-                    // Los nombres de función deben coincidir exactamente
                     handlePauseChunkedDownload(safeConn, url)
+                    
+                    // Confirmar pausa al cliente - esto es importante
+                    sendMessage(safeConn, "pause_confirmed", url, "Download paused successfully")
+                } else {
+                    sendMessage(safeConn, "error", url, "No active download found to pause")
                 }
             }
         case "resume_download":
             if url, ok := msg["url"].(string); ok {
-                log.Printf("Resuming download for: %s", url)
+                log.Printf("Resume request received for: %s", url)
                 
-                // Reanudar descarga por chunks
-                if useChunks := true; useChunks && ChunksSupported {
-                    // Los nombres de función deben coincidir exactamente
-                    go handleResumeChunkedDownload(safeConn, url)
-                } else {
-                    go handleDownload(safeConn, url)
+                // Reanudar descarga
+                handleResumeChunkedDownload(safeConn, url)
+                
+                // Confirmar reanudación al cliente - esto es importante
+                sendMessage(safeConn, "resume_confirmed", url, "Download resumed successfully")
+            }
+        case "calculate_checksum":
+            if url, ok := msg["url"].(string); ok {
+                if filename, ok := msg["filename"].(string); ok {
+                    log.Printf("Checksum calculation request for: %s", filename)
+                    handleCalculateChecksum(safeConn, url, filename)
                 }
             }
         case "ping":

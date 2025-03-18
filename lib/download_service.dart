@@ -58,17 +58,17 @@ extension DownloadItemExtensions on DownloadItem {
   // Método para calcular progreso basado en chunks
   String getProgressFromChunks() {
     if (chunks.isNotEmpty) {
-      double totalChunkSize = 0; // Changed to double
-      double completedBytes = 0; // Changed to double
+      double totalChunkSize = 0;
+      double completedBytes = 0;
       
       for (final chunk in chunks.values) {
-        final chunkSize = (chunk.end - chunk.start + 1).toDouble(); // Convert to double
+        final chunkSize = (chunk.end - chunk.start + 1).toDouble();
         totalChunkSize += chunkSize;
         
         if (chunk.status == 'completed') {
           completedBytes += chunkSize;
         } else {
-          completedBytes += chunk.progress.toDouble(); // Convert to double
+          completedBytes += chunk.progress.toDouble();
         }
       }
       
@@ -188,6 +188,15 @@ class DownloadService {
           case 'pong':
             if (kDebugMode) print('Pong received from server');
             break;
+          case 'pause_confirmed':
+            _handlePauseConfirmation(data);
+            break;
+          case 'resume_confirmed':
+            _handleResumeConfirmation(data);
+            break;
+          case 'checksum_result':
+            _handleChecksumResult(data);
+            break;
           default:
             if (kDebugMode) print('Unknown message type: ${data['type']}');
         }
@@ -249,7 +258,6 @@ class DownloadService {
         'url': url,
         'use_chunks': useChunks  // Añadir parámetro para usar chunks
       });
-
     } catch (e) {
       print('Error starting download: $e');
       
@@ -269,39 +277,48 @@ class DownloadService {
     }
   }
 
+  // Mejorar las funciones de pausa/resume para asegurar que actualizan el estado correctamente
   void pauseDownload(String url) {
-    print('Pausing download: $url');
+    print('Client: Sending pause command for: $url');
     
     final item = _downloads[url];
-    if (item == null) return;
+    if (item == null) {
+      print('No download found to pause: $url');
+      return;
+    }
     
+    // Actualizar UI primero
     item.addLog('⏸ Pausing download');
     item.status = DownloadStatus.paused;
     item.currentSpeed = 0;
+    _downloadController.add(item);
     
+    // Luego notificar al servidor
     _connector.send({
       'type': 'pause_download',
       'url': url,
     });
-    
-    _downloadController.add(item);
   }
 
   void resumeDownload(String url) {
-    print('Resuming download: $url');
+    print('Client: Sending resume command for: $url');
     
     final item = _downloads[url];
-    if (item == null) return;
+    if (item == null) {
+      print('No download found to resume: $url');
+      return;
+    }
     
+    // Actualizar UI primero
     item.addLog('▶️ Resuming download');
     item.status = DownloadStatus.downloading;
+    _downloadController.add(item);
     
+    // Luego notificar al servidor
     _connector.send({
       'type': 'resume_download',
       'url': url,
     });
-    
-    _downloadController.add(item);
   }
 
   void cancelDownload(String url) {
@@ -413,8 +430,13 @@ class DownloadService {
             item.status = DownloadStatus.completed;
             item.progress = 1.0;
             item.addLog('✅ Download completed successfully');
-            // Calcular checksum en background
-            _verifyChecksum(item);
+            
+            // Limpiar historial de chunks una vez completado para liberar memoria
+            item.chunks.clear();
+            
+            // El servidor ahora calculará el checksum por nosotros
+            item.addLog('🔍 Requesting checksum calculation from server...');
+            _requestChecksum(item.url, item.filename);
             break;
         }
 
@@ -426,54 +448,30 @@ class DownloadService {
     }
   }
 
-  static String _calculateSHA256(Map<String, dynamic> args) {
-    final filePath = args['path'] as String;
-    final file = File(filePath);
-    
-    try {
-      final startTime = DateTime.now();
-      final fileSize = file.lengthSync();
-      print('Starting SHA-256 calculation for $filePath ($fileSize bytes)');
-      
-      // Leer archivo y calcular hash de una vez
-      final bytes = file.readAsBytesSync();
-      final digest = sha256.convert(bytes);
-      
-      final duration = DateTime.now().difference(startTime);
-      print('SHA-256 calculation completed in ${duration.inSeconds}.${duration.inMilliseconds % 1000}s');
-      
-      return digest.toString();
-    } catch (e) {
-      print('Error calculating checksum: $e');
-      return 'Error: $e';
-    }
+  void _requestChecksum(String url, String filename) {
+    // Solicitar al servidor que calcule el checksum
+    _connector.send({
+      'type': 'calculate_checksum',
+      'url': url,
+      'filename': filename,
+    });
   }
 
-  Future<void> _verifyChecksum(DownloadItem item) async {
-    try {
-      item.addLog('🔍 Starting file integrity verification...');
-      _downloadController.add(item);
-      
-      // Iniciar cálculo
-      final start = DateTime.now();
-      item.addLog('🧮 Calculating SHA-256 checksum...');
-      _downloadController.add(item);
-      
-      final path = '${Platform.environment['HOME']}/Downloads/${item.filename}';
-      final checksum = await compute(_calculateSHA256, {'path': path});
-      
-      // Registrar resultado
-      final duration = DateTime.now().difference(start);
-      item.checksum = checksum;
-      item.addLog('✅ Checksum verified in ${duration.inSeconds}s');
-      item.addLog('🔐 SHA-256: $checksum');
-      _downloadController.add(item);
-      
-    } catch (e) {
-      print('Error verifying checksum: $e');
-      item.addLog('⚠️ Could not verify checksum: $e');
-      _downloadController.add(item);
-    }
+  void _handleChecksumResult(Map<String, dynamic> data) {
+    final url = data['url'];
+    final checksum = data['checksum'] as String;
+    final duration = data['duration'] as int; // en milisegundos
+    final filename = data['filename'] as String;
+    
+    final item = _downloads[url];
+    if (item == null) return;
+    
+    item.checksum = checksum;
+    final seconds = duration / 1000.0;
+    item.addLog('✅ SHA-256 checksum calculated in ${seconds.toStringAsFixed(1)}s');
+    item.addLog('🔐 SHA-256: $checksum');
+    
+    _downloadController.add(item);
   }
 
   void _handleErrorMessage(Map<String, dynamic> data) {
@@ -547,6 +545,8 @@ class DownloadService {
       formattedMessage = '🚀 $message';
     } else if (message.contains('Resuming')) {
       formattedMessage = '▶️ $message';
+    } else if (message.contains('checksum')) {
+      formattedMessage = '🔐 $message';
     } else {
       formattedMessage = '💬 $message';
     }
@@ -621,7 +621,18 @@ class DownloadService {
     final item = _downloads[url];
     if (item == null) return;
     
+    // No procesar más actualizaciones de chunks si la descarga ya está completada
+    if (item.status == DownloadStatus.completed) {
+      print('Ignoring chunk progress for completed download: $url');
+      return;
+    }
+    
     final chunk = ChunkInfo.fromJson(chunkData);
+    
+    // Debug: Imprimir actualizaciones de chunk para monitorear
+    print('Chunk ${chunk.id} updated: progress=${chunk.progress}, status=${chunk.status}');
+    
+    // Actualizar el chunk en el objeto download
     item.updateChunk(chunk);
     
     // Añadir log solo para cambios significativos
@@ -630,7 +641,31 @@ class DownloadService {
       item.addLog('🧩 Chunk ${chunk.id+1}: $chunkProgress% at ${_formatSpeed(chunk.speed)}');
     }
     
-    // Actualizar UI
+    // Actualizar UI inmediatamente
     _downloadController.add(item);
+  }
+
+  // Agregar nuevos handlers para confirmaciones
+  void _handlePauseConfirmation(Map<String, dynamic> data) {
+    final url = data['url'] as String;
+    print('Server confirmed pause of $url');
+    
+    final item = _downloads[url];
+    if (item != null && item.status != DownloadStatus.paused) {
+      item.status = DownloadStatus.paused;
+      item.currentSpeed = 0;
+      _downloadController.add(item);
+    }
+  }
+
+  void _handleResumeConfirmation(Map<String, dynamic> data) {
+    final url = data['url'] as String;
+    print('Server confirmed resume of $url');
+    
+    final item = _downloads[url];
+    if (item != null && item.status != DownloadStatus.downloading) {
+      item.status = DownloadStatus.downloading;
+      _downloadController.add(item);
+    }
   }
 }
