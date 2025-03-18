@@ -11,8 +11,23 @@ A modern, lightweight download manager built with Flutter and Go.
 - 🔄 Auto-retry on failures with exponential backoff
 - 🔒 SHA-256 verification for completed downloads
 - 🧠 Smart download management with proper cancellation and restart
+- 🧩 Multi-connection chunked downloads for faster speeds
+- 🔢 Individual chunk visualization and tracking
 - 🌙 Dark theme optimized
 - 🎯 Multi-platform support (Linux, Windows, MacOS)
+
+## Technical Features
+
+- **Chunked Downloads**: Download files in multiple parallel connections
+- **Real-time Monitoring**: See download speed and progress in real-time
+- **WebSocket Communication**: Bidirectional real-time updates between UI and server
+- **Smart Retry Logic**: Automatic retry with exponential backoff on network issues
+- **Responsive Design**: Works on all screen sizes from mobile to desktop
+- **File Integrity**: SHA-256 verification when downloads complete
+- **Adaptive UI**: Automatically adjusts to different screen sizes
+- **Async Processing**: Non-blocking operations for smooth UI experience
+- **Singleton Services**: Efficient state management
+- **Cross-Platform**: One codebase for all desktop platforms
 
 ## Development
 
@@ -38,7 +53,7 @@ cd server && go mod download
 
 3. Run the development version
 ```bash
-./dev.sh
+flutter run
 ```
 
 ## Architecture
@@ -51,12 +66,14 @@ CatchMe uses a Flutter frontend for the UI and a Go backend for handling downloa
 - **Download Tracking**: Downloads are tracked on both client and server
 - **Synchronized States**: Client and server maintain synchronized download states
 - **Cancel Handling**: Special handling for download cancellation and restart
+- **Chunk Management**: Server splits downloads into manageable chunks
 
 ## Known Issues
 
 - SHA-256 calculation for large files needs optimization
-- True pause/resume functionality not yet implemented
-- Multi-connection downloads on the roadmap
+- True pause/resume functionality still being perfected
+- Chunks visualization only appears when paused (to be fixed)
+- Downloads may stall at ~85% on some servers
 
 ## License
 
