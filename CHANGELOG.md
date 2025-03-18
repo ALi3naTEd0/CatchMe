@@ -13,6 +13,7 @@
 - WebSocket-based communication between UI and server
 - Connection status indicators with improved visibility
 - Basic completed downloads view with full checksum display
+- Download tracking synchronization between client and server
 
 ### Enhanced
 - Responsive layout support for all screen sizes
@@ -21,6 +22,19 @@
 - Better alignment and spacing in mobile view
 - Automatic layout adaptation based on screen width
 - Drawer navigation for mobile devices
+- Improved download cancellation handling
+- Fixed download restart issues after cancellation
+- Better client-server state coordination
+
+### Fixed
+- Server-client synchronization for canceled downloads
+- Message handling for canceled downloads
+- Download restart after cancellation
+- Type casting errors with speed values
+- Repeated server messages after cancellation
+- UI glitches when restarting downloads
+- Download loss on connection errors
+- Download state inconsistencies
 
 ### Technical
 - Implemented singleton pattern for services
@@ -33,6 +47,8 @@
 - Responsive breakpoints implementation
 - Mobile-first design approach
 - Adaptive UI components
+- Cancel handling with recently canceled list
+- Active downloads server-side tracking
 
 ### Infrastructure
 - Project documentation updated
