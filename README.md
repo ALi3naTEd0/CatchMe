@@ -4,13 +4,14 @@ A modern, lightweight download manager built with Flutter and Go.
 
 ## Features
 
-- 🚀 Clean, modern Material Design 3 interface
+- 🎨 Modern Material Design 3 interface with consistent color scheme
 - 📊 Real-time progress tracking with detailed statistics
+- ⏱️ Speed, ETA, and average speed monitoring
+- 📝 Live download logs with timestamped entries
 - ⏯️ Pause/Resume functionality
 - ✅ SHA-256 verification for completed downloads
-- 📝 Live download logs
+- 🔄 Auto-retry on failures with exponential backoff
 - 🌙 Dark theme optimized
-- 🔄 Auto-retry on failures
 - 🎯 Multi-platform support (Linux, Windows, MacOS)
 
 ## Development
@@ -44,9 +45,10 @@ cd server && go mod download
 
 CatchMe uses a Flutter frontend for the UI and a Go backend for handling downloads. Communication between them is done via WebSocket for real-time updates.
 
-## Contributing
+## Known Issues
 
-Pull requests are welcome! For major changes, please open an issue first to discuss what you would like to change.
+- SHA-256 calculation for large files needs optimization
+- Server connection status could be more robust
 
 ## License
 
