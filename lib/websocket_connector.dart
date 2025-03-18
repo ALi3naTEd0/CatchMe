@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart';  // Agregar esta línea
+import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 enum ConnectionStatus { disconnected, connecting, connected }
@@ -11,70 +11,141 @@ class WebSocketConnector {
   WebSocketConnector._internal();
 
   final _statusController = StreamController<ConnectionStatus>.broadcast();
-  final _messageController = StreamController<String>.broadcast();  // Cambiar a String
+  final _messageController = StreamController<String>.broadcast();
 
   WebSocketChannel? _channel;
   Timer? _reconnectTimer;
   Timer? _pingTimer;
   bool _isConnected = false;
+  bool _isConnecting = false;
   int _reconnectAttempts = 0;
   static const _maxReconnectAttempts = 5;
   
+  // Cambiar a variable no final para permitir actualización
+  Completer<void> _connectionLock = Completer<void>()..complete();
+  
   Stream<ConnectionStatus> get statusStream => _statusController.stream;
-  Stream<String> get messageStream => _messageController.stream;  // Cambiar a String
+  Stream<String> get messageStream => _messageController.stream;
   bool get isConnected => _isConnected;
 
   Future<void> connect() async {
+    // Si ya estamos conectados, no hacer nada
     if (_isConnected) return;
+    
+    // Si ya estamos conectando, esperar a que termine
+    if (_isConnecting) {
+      print('Connection already in progress, waiting...');
+      await _connectionLock.future;
+      return;
+    }
 
+    // Adquirir lock para conexión
+    _isConnecting = true;
+    final connectionCompleter = Completer<void>();
+    _connectionLock = connectionCompleter;
+    
     try {
       _statusController.add(ConnectionStatus.connecting);
-      print('Connecting to WebSocket server...');
+      print('Attempting WebSocket connection...');
 
+      // Cerrar cualquier canal existente primero
+      await _closeExistingChannel();
+
+      // Crear nuevo canal
       _channel = WebSocketChannel.connect(Uri.parse('ws://localhost:8080/ws'));
-      await _channel!.ready;
       
+      // Esperar a que esté listo
+      await _channel!.ready.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw TimeoutException('Connection timed out after 5s'),
+      );
+      
+      // Configurar listeners
       _setupListeners();
       _startPingTimer();
       
+      // Actualizar estado
       _isConnected = true;
       _reconnectAttempts = 0;
       _statusController.add(ConnectionStatus.connected);
-      print('Connected to WebSocket server');
+      print('WebSocket connected successfully');
 
     } catch (e) {
       print('WebSocket connection failed: $e');
       _handleDisconnect();
+    } finally {
+      _isConnecting = false;
+      connectionCompleter.complete();
+    }
+  }
+
+  Future<void> _closeExistingChannel() async {
+    if (_channel != null) {
+      try {
+        await _channel!.sink.close();
+        print('Closed existing WebSocket channel');
+      } catch (e) {
+        print('Error closing existing channel: $e');
+      }
+      _channel = null;
     }
   }
 
   void send(Map<String, dynamic> message) {
-    if (!_isConnected) return;
+    if (!_isConnected || _channel == null) {
+      print('Cannot send message: not connected');
+      return;
+    }
     
     try {
-      _channel?.sink.add(jsonEncode(message));
+      final jsonMessage = jsonEncode(message);
+      print('Sending: $jsonMessage');
+      _channel?.sink.add(jsonMessage);
     } catch (e) {
-      // Solo log crítico
-      if (kDebugMode) print('WS Error: $e');
+      print('WS Error during send: $e');
       _handleDisconnect();
     }
   }
 
   void _setupListeners() {
-    _channel?.stream.listen(
-      (message) => _messageController.add(message as String),
+    // Usar .asBroadcastStream() para permitir múltiples escuchas
+    final broadcastStream = _channel!.stream.asBroadcastStream();
+    
+    broadcastStream.listen(
+      (message) {
+        try {
+          _messageController.add(message as String);
+          
+          // Manejar pongs específicamente
+          final data = jsonDecode(message as String);
+          if (data['type'] == 'pong') {
+            print('Received pong');
+          }
+        } catch (e) {
+          print('Error processing message: $e');
+        }
+      },
       onError: (e) {
-        if (kDebugMode) print('WS Error: $e');
+        print('WS Stream error: $e');
         _handleDisconnect();
       },
-      onDone: () => _handleDisconnect(),
+      onDone: () {
+        print('WS connection closed');
+        _handleDisconnect();
+      },
     );
   }
 
   void _handleDisconnect() {
+    // Si ya estamos desconectados, no hacer nada
+    if (!_isConnected) return;
+
     _isConnected = false;
     _statusController.add(ConnectionStatus.disconnected);
     _pingTimer?.cancel();
+    
+    // Limpiar conexión actual
+    _closeExistingChannel();
 
     if (_reconnectAttempts < _maxReconnectAttempts) {
       _reconnectAttempts++;
@@ -89,7 +160,7 @@ class WebSocketConnector {
 
   void _startPingTimer() {
     _pingTimer?.cancel();
-    _pingTimer = Timer.periodic(Duration(seconds: 30), (_) {
+    _pingTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (_isConnected) {
         send({'type': 'ping'});
       }
@@ -99,7 +170,7 @@ class WebSocketConnector {
   void dispose() {
     _reconnectTimer?.cancel();
     _pingTimer?.cancel();
-    _channel?.sink.close();
+    _closeExistingChannel();
     _statusController.close();
     _messageController.close();
   }

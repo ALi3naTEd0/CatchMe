@@ -45,6 +45,7 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
+  bool _serverStarted = false;
   
   static const List<Widget> _screens = [
     DownloadsScreen(),
@@ -55,12 +56,19 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    _startServerAndInitServices();
+  }
+  
+  // Método para iniciar servidor y después servicios
+  Future<void> _startServerAndInitServices() async {
     print('\n=== Iniciando servidor Go ===');
-    // Iniciar servidor después de que la UI esté lista
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      print('Llamando a ServerLauncher.startServer()');
-      await ServerLauncher().startServer();
-      print('ServerLauncher.startServer() completado');
+    await ServerLauncher().startServer();
+    print('ServerLauncher.startServer() completado');
+    
+    // Pequeño delay para asegurar que el servidor esté listo
+    await Future.delayed(const Duration(milliseconds: 500));
+    setState(() {
+      _serverStarted = true;
     });
   }
 
@@ -175,8 +183,23 @@ class _MainScreenState extends State<MainScreen> {
           Expanded(
             child: Column(
               children: [
-                // Screen content
-                Expanded(child: _screens[_selectedIndex]),
+                // Show loading if server not started yet
+                if (!_serverStarted)
+                  const Expanded(
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 16),
+                          Text('Starting server...'),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  // Screen content
+                  Expanded(child: _screens[_selectedIndex]),
                 
                 // Server status bar
                 Container(

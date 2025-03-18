@@ -14,11 +14,24 @@ class DownloadsScreen extends StatefulWidget {
 class _DownloadsScreenState extends State<DownloadsScreen> {
   final _downloadService = DownloadService();
   final _urlController = TextEditingController();
+  bool _serviceInitialized = false;
 
   @override
   void initState() {
     super.initState();
-    _downloadService.init(); // Asegurar que el stream está listo
+    // Inicialización retrasada para asegurar que el servidor esté listo
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initService();
+    });
+  }
+  
+  Future<void> _initService() async {
+    // Esperar un poco para asegurar que el servidor esté listo
+    await Future.delayed(const Duration(milliseconds: 800));
+    await _downloadService.init();
+    setState(() {
+      _serviceInitialized = true;
+    });
   }
 
   void _showAddDownloadDialog(BuildContext context) {
@@ -92,20 +105,24 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
           ),
         ],
       ),
-      body: StreamBuilder<DownloadItem>(
-        stream: _downloadService.downloadStream,
-        builder: (context, snapshot) {
-          // Mostrar lista aunque no haya datos en el stream
-          return ListView.builder(
-            itemCount: _downloadService.downloads.length,
-            padding: const EdgeInsets.all(16),
-            itemBuilder: (context, index) {
-              final download = _downloadService.downloads[index];
-              return _buildDownloadCard(download);
-            },
-          );
-        },
-      ),
+      body: !_serviceInitialized 
+        ? const Center(
+            child: CircularProgressIndicator(),
+          )
+        : StreamBuilder<DownloadItem>(
+          stream: _downloadService.downloadStream,
+          builder: (context, snapshot) {
+            // Mostrar lista aunque no haya datos en el stream
+            return ListView.builder(
+              itemCount: _downloadService.downloads.length,
+              padding: const EdgeInsets.all(16),
+              itemBuilder: (context, index) {
+                final download = _downloadService.downloads[index];
+                return _buildDownloadCard(download);
+              },
+            );
+          },
+        ),
     );
   }
 
@@ -402,19 +419,27 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   }
 
   Future<void> _openFileLocation(DownloadItem download) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final path = '${dir.path}/downloads';
-    
     try {
+      // Usar la ruta ~/Downloads directamente, no la ruta de documentos
+      final home = Platform.environment['HOME']!;
+      final downloadsPath = '$home/Downloads';
+      print('Opening downloads folder: $downloadsPath');
+      
       if (Platform.isLinux) {
-        await Process.run('xdg-open', [path]);
+        final result = await Process.run('xdg-open', [downloadsPath]);
+        if (result.exitCode != 0) {
+          throw Exception('Failed to open Downloads folder');
+        }
       } else if (Platform.isWindows) {
-        await Process.run('explorer', [path]);
+        await Process.run('explorer.exe', [downloadsPath.replaceAll('/', '\\')]);
       } else if (Platform.isMacOS) {
-        await Process.run('open', [path]);
+        await Process.run('open', [downloadsPath]);
       }
     } catch (e) {
       print('Error opening folder: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open Downloads folder: $e')),
+      );
     }
   }
 

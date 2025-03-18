@@ -17,6 +17,10 @@ class DownloadItem {
   String? checksum;  // Añadir campo para guardar el SHA
   List<String> logs = [];  // Añadir logs de la descarga
 
+  // Historial de velocidades para calcular promedio
+  final List<double> _speedHistory = [];
+  static const int _maxHistoryEntries = 10;
+
   DownloadItem({
     required this.url,
     required this.filename,
@@ -76,5 +80,23 @@ class DownloadItem {
     final timestamp = DateTime.now();
     final time = '${timestamp.hour}:${timestamp.minute}:${timestamp.second}';
     logs.add('[$time] $message');
+  }
+
+  // Método para actualizar velocidad actual y calcular promedio
+  void updateSpeed(double newSpeed) {
+    if (newSpeed.isFinite && newSpeed >= 0) {
+      currentSpeed = newSpeed;
+      
+      // Agregar al historial limitando tamaño
+      _speedHistory.add(newSpeed);
+      if (_speedHistory.length > _maxHistoryEntries) {
+        _speedHistory.removeAt(0);
+      }
+      
+      // Calcular promedio solo si hay datos
+      if (_speedHistory.isNotEmpty) {
+        averageSpeed = _speedHistory.reduce((a, b) => a + b) / _speedHistory.length;
+      }
+    }
   }
 }
