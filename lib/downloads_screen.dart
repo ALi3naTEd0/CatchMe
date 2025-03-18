@@ -241,7 +241,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                 LinearProgressIndicator(
                   value: download.progress,
                   backgroundColor: Colors.grey[800],
-                  valueColor: AlwaysStoppedAnimation<Color>(accent), // Ahora accent no es nullable
+                  valueColor: AlwaysStoppedAnimation<Color>(accent),
                   minHeight: 6,
                 ),
                 const SizedBox(height: 12),
@@ -369,7 +369,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                 // Mini log más visible y durante la descarga
                 if (download.status == DownloadStatus.downloading || download.logs.isNotEmpty)
                   Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    margin: const EdgeInsets.only(top: 16),
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: Colors.grey[900],
@@ -407,10 +407,10 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                         ),
                   ),
                 
-                // Agregar visualización de chunks si están disponibles
+                // Visualización mejorada de chunks
                 if (download.chunks.isNotEmpty && download.status == DownloadStatus.downloading)
                   Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    margin: const EdgeInsets.only(top: 16),
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: Colors.grey[900],
@@ -420,11 +420,17 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Download Chunks', style: TextStyle(fontWeight: FontWeight.bold)),
-                        SizedBox(height: 8),
-                        ...download.chunks.values.map((chunk) => 
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            'Download Chunks (${download.chunks.length})',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                        ),
+                        // Mostrar chunks con más actividad
+                        ...download.chunks.values.toList().take(5).map((chunk) => 
                           Padding(
-                            padding: const EdgeInsets.only(bottom: 4),
+                            padding: const EdgeInsets.symmetric(vertical: 4),
                             child: Row(
                               children: [
                                 Container(
@@ -433,9 +439,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                                 ),
                                 Expanded(
                                   child: LinearProgressIndicator(
-                                    value: chunk.end > chunk.start
-                                      ? chunk.progress / (chunk.end - chunk.start + 1)
-                                      : 0.0,
+                                    value: chunk.progressPercentage,
                                     backgroundColor: Colors.grey[800],
                                     valueColor: AlwaysStoppedAnimation<Color>(
                                       _getChunkColor(chunk.status, accent)
@@ -450,7 +454,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                                 ),
                               ],
                             ),
-                          )
+                          ),
                         ).toList(),
                       ],
                     ),
@@ -485,7 +489,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       case 'pending':
         return 'Pending';
       case 'active':
-        final progress = ((chunk.progress * 100) / (chunk.end - chunk.start + 1)).toStringAsFixed(0);
+        final progress = ((chunk.progressPercentage) * 100).toStringAsFixed(0);
         return '$progress% @ ${_formatSpeed(chunk.speed)}';
       case 'completed':
         return 'Complete';
@@ -540,107 +544,6 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         ),
       ],
     );
-  }
-
-  Widget _buildHeader(DownloadItem download) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // URL con estilo monoespacio
-          Text(
-            download.url,
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 12,
-              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 8),
-          
-          // Filename and controls
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  download.filename,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-              ),
-              if (download.status == DownloadStatus.completed)
-                IconButton(
-                  icon: Icon(
-                    Icons.folder_open,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  onPressed: () => _openFileLocation(download),
-                  tooltip: 'Open folder',
-                )
-              else
-                IconButton(
-                  icon: Icon(
-                    download.status == DownloadStatus.downloading 
-                      ? Icons.pause 
-                      : Icons.play_arrow,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  onPressed: () => _toggleDownload(download),
-                ),
-              IconButton(
-                icon: Icon(
-                  Icons.close,
-                  color: Theme.of(context).colorScheme.error,
-                ),
-                onPressed: () => _downloadService.cancelDownload(download.url),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatItem({
-    required IconData icon,
-    required String label,
-    required String value,
-  }) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 8),
-      child: Column(
-        children: [
-          Icon(icon, size: 16, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(height: 4),
-          Text(label,
-            style: TextStyle(
-              fontSize: 12,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-          ),
-          Text(value,
-            style: TextStyle(fontSize: 12),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRetryButton(DownloadItem download) {
-    return TextButton.icon(
-      onPressed: () => _retryDownload(download),
-      icon: Icon(Icons.refresh),
-      label: Text('Retry'),
-      style: TextButton.styleFrom(
-        foregroundColor: Theme.of(context).colorScheme.error,
-      ),
-    );
-  }
-
-  void _retryDownload(DownloadItem download) {
-    _downloadService.startDownload(download.url);
   }
 
   Future<void> _openFileLocation(DownloadItem download) async {

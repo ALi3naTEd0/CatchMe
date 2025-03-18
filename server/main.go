@@ -110,7 +110,7 @@ func handleDownload(safeConn *SafeConn, url string) {
 
     // Intentar la descarga con retries
     var resp *http.Response
-    maxRetries := 10
+    maxRetries := 15  // Aumentado de 10 a 15
 
     for attempt := 0; attempt < maxRetries; attempt++ {
         if attempt > 0 {

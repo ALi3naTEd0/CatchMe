@@ -98,7 +98,7 @@ class DownloadService {
   // Retry mechanism
   final Map<String, int> _retryCount = {};
   final Map<String, Timer> _retryTimers = {};
-  static const int _maxRetries = 3;
+  static const int _maxRetries = 8;  // Aumentado de 3 a 8
 
   // Lista de descargas
   Stream<DownloadItem> get downloadStream => _downloadController.stream;
