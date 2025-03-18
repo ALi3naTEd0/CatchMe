@@ -1,25 +1,25 @@
 # CatchMe TODO List
 
-## Fase 1: Funcionalidad Base ✅
-- [x] Descarga básica
-  - [x] Servidor Go iniciando correctamente
-  - [x] WebSocket funcionando
-  - [x] Descarga a ~/Downloads
-  - [x] Progreso actualizado en tiempo real
+## Phase 1: Core Functionality ✅
+- [x] Basic Downloads
+  - [x] Go server starting correctly
+  - [x] WebSocket communication
+  - [x] Download to ~/Downloads
+  - [x] Real-time progress updates
 
-## Fase 2: UI/UX ✅
-- [x] Interfaz principal
-  - [x] Diseño de tarjetas de descarga
-  - [x] Indicadores de progreso
-  - [x] Mostrar velocidad y tiempo
-  - [x] Logs por descarga con timestamps
+## Phase 2: UI/UX ✅
+- [x] Main Interface
+  - [x] Download cards design
+  - [x] Progress indicators
+  - [x] Speed and time display
+  - [x] Per-download logs with timestamps
 
-## Fase 3: Características Extra ✅
-- [ ] Gestión de descargas
-  - [ ] Pausar/Reanudar
-  - [x] Cancelar descarga
-  - [ ] Auto-retry en fallos
-  - [x] Verificación SHA-256
+## Phase 3: Extra Features
+- [ ] Download Management
+  - [ ] Pause/Resume
+  - [x] Cancel download
+  - [ ] Auto-retry on failures
+  - [x] SHA-256 verification
 
 ## Achievements & Work in Progress
 
@@ -53,11 +53,11 @@
 - Browser extension integration
 
 ## Backlog
-- [ ] Optimizar cálculo de SHA-256 para archivos grandes
-- [ ] Extensión navegador
-- [ ] Configuraciones
-  - [ ] Carpeta de descarga personalizable
-  - [ ] Límite de velocidad
-  - [ ] Conexiones simultáneas
-- [ ] Multi-descarga
-- [ ] Temas (GTK/System)
+- [ ] Optimize SHA-256 calculation for large files
+- [ ] Browser extension
+- [ ] Settings
+  - [ ] Custom download directory
+  - [ ] Speed limits
+  - [ ] Concurrent connections
+- [ ] Multi-download
+- [ ] Themes (GTK/System)
