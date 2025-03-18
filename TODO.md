@@ -6,6 +6,8 @@
   - [x] WebSocket communication
   - [x] Download to ~/Downloads
   - [x] Real-time progress updates
+  - [x] Download cancellation
+  - [x] Error handling and retry logic
 
 ## Phase 2: UI/UX ✅
 - [x] Main Interface
@@ -15,13 +17,32 @@
   - [x] Per-download logs with timestamps
   - [x] Responsive layout for all screen sizes
   - [x] Mobile-first design with drawer navigation
+  - [x] Download status indicators
+  - [x] Live logs during download
 
-## Phase 3: Extra Features
+## Phase 3: Extra Features 🚧
 - [ ] Download Management
-  - [ ] Pause/Resume
-  - [x] Cancel download
-  - [ ] Auto-retry on failures
+  - [x] Cancel download with proper cleanup
+  - [x] Safe download restart
+  - [x] Client-server download synchronization
+  - [ ] Proper pause/resume
+  - [x] Auto-retry on failures
   - [x] SHA-256 verification
+  - [ ] Multi-connection downloads
+  - [ ] Download persistence across restarts
+  - [ ] Download queue management
+
+## Current Issues Fixed 🛠️
+- [x] Fix server connection issues
+- [x] Fix type casting errors with speed values
+- [x] Fix cancel download functionality
+- [x] Fix download restart after cancel
+- [x] Fix message handling for canceled downloads
+- [x] Fix log display issues
+- [x] Improve error handling and messaging
+- [x] Prevent app crashes on network errors
+- [x] Fix duplicate download item issues
+- [x] Improve client-server state synchronization
 
 ## Achievements & Work in Progress
 
@@ -39,6 +60,10 @@
 - Collapsible sidebar for small screens
 - Optimized stats layout for different screen sizes
 - Consistent spacing and alignment across devices
+- Better download item management
+- Fixed bugs with download cancellation
+- Improved log display and organization
+- Proper client-server coordination for downloads
 
 ### 🚧 In Progress - Server Improvements
 - Chunked downloads support
