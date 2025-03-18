@@ -7,13 +7,17 @@
 - Real-time download progress tracking
 - Enhanced download statistics (speed, ETA, average speed)
 - Live download logs with formatted timestamps
-- SHA-256 file verification (pending optimization)
+- SHA-256 file verification
 - Pause/Resume functionality
-- Auto-retry mechanism for failed downloads
+- Auto-retry mechanism with exponential backoff
+- Multi-connection chunked downloads
 - WebSocket-based communication between UI and server
 - Connection status indicators with improved visibility
 - Basic completed downloads view with full checksum display
 - Download tracking synchronization between client and server
+- Chunk visualization during downloads
+- Improved error recovery logic
+- More robust server restart handling
 
 ### Enhanced
 - Responsive layout support for all screen sizes
@@ -25,6 +29,11 @@
 - Improved download cancellation handling
 - Fixed download restart issues after cancellation
 - Better client-server state coordination
+- More reliable connection management
+- Improved server process handling
+- Faster download speeds with multi-connection downloads
+- More detailed error and status reporting
+- Better progress tracking for large files
 
 ### Fixed
 - Server-client synchronization for canceled downloads
@@ -35,11 +44,16 @@
 - UI glitches when restarting downloads
 - Download loss on connection errors
 - Download state inconsistencies
+- Memory leaks during long downloads
+- Unstable connections with large files
+- Unexpected download termination
+- Retry mechanism failures
+- Connection handling after network interruptions
 
 ### Technical
 - Implemented singleton pattern for services
 - Real-time progress updates via WebSocket
-- Proper error handling and retry logic
+- Proper error handling and retry logic with backoff
 - Development environment setup
 - Server process management
 - Unified color scheme and typography
@@ -49,8 +63,14 @@
 - Adaptive UI components
 - Cancel handling with recently canceled list
 - Active downloads server-side tracking
+- Chunked download implementation
+- Range request support for partial downloads
+- Multi-connection concurrent downloads
+- Reliable server cleanup on exit
 
 ### Infrastructure
 - Project documentation updated
 - Development script for easy startup
 - Build configurations for multi-platform support
+- Server auto-recovery
+- Robust error handling
