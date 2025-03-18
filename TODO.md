@@ -14,11 +14,11 @@
   - [x] Mostrar velocidad y tiempo
   - [x] Logs por descarga con timestamps
 
-## Fase 3: Características Extra ✅
-- [x] Gestión de descargas
-  - [x] Pausar/Reanudar
+## Fase 3: Características Extra
+- [ ] Gestión de descargas
+  - [ ] Pausar/Reanudar
   - [x] Cancelar descarga
-  - [x] Auto-retry en fallos
+  - [ ] Auto-retry en fallos
   - [x] Verificación SHA-256
 
 ## Backlog
