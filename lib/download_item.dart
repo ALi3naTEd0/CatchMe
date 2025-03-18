@@ -18,8 +18,11 @@ class DownloadItem {
   List<String> logs = [];  // Añadir logs de la descarga
 
   // Historial de velocidades para calcular promedio
+  static const int _maxHistoryEntries = 50;  // Aumentar historial
   final List<double> _speedHistory = [];
-  static const int _maxHistoryEntries = 10;
+  DateTime _lastSpeedUpdate = DateTime.now();
+  double _speedAccumulator = 0;
+  int _speedSampleCount = 0;
 
   DownloadItem({
     required this.url,
@@ -88,19 +91,42 @@ class DownloadItem {
 
   // Método para actualizar velocidad actual y calcular promedio
   void updateSpeed(double newSpeed) {
-    if (newSpeed.isFinite && newSpeed >= 0) {
-      currentSpeed = newSpeed;
-      
-      // Agregar al historial limitando tamaño
-      _speedHistory.add(newSpeed);
-      if (_speedHistory.length > _maxHistoryEntries) {
-        _speedHistory.removeAt(0);
+    if (!newSpeed.isFinite || newSpeed < 0) return;
+
+    // Actualizar velocidad actual
+    currentSpeed = newSpeed;
+    
+    // Acumular para promedio móvil
+    _speedAccumulator += newSpeed;
+    _speedSampleCount++;
+    
+    // Actualizar promedio cada segundo
+    final now = DateTime.now();
+    if (now.difference(_lastSpeedUpdate) >= const Duration(seconds: 1)) {
+      if (_speedSampleCount > 0) {
+        final avgSpeed = _speedAccumulator / _speedSampleCount;
+        _speedHistory.add(avgSpeed);
+        if (_speedHistory.length > _maxHistoryEntries) {
+          _speedHistory.removeAt(0);
+        }
+        
+        // Calcular promedio general excluyendo valores extremos
+        if (_speedHistory.length >= 3) {
+          var speeds = List<double>.from(_speedHistory);
+          speeds.sort();
+          // Remover 10% superior e inferior
+          final trimCount = (speeds.length * 0.1).round();
+          if (trimCount > 0) {
+            speeds = speeds.sublist(trimCount, speeds.length - trimCount);
+          }
+          averageSpeed = speeds.reduce((a, b) => a + b) / speeds.length;
+        }
       }
       
-      // Calcular promedio solo si hay datos
-      if (_speedHistory.isNotEmpty) {
-        averageSpeed = _speedHistory.reduce((a, b) => a + b) / _speedHistory.length;
-      }
+      // Reiniciar acumuladores
+      _speedAccumulator = 0;
+      _speedSampleCount = 0;
+      _lastSpeedUpdate = now;
     }
   }
 }

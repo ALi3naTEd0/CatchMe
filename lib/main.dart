@@ -66,6 +66,7 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
   bool _serverStarted = false;
+  String _statusMessage = 'Initializing...';
   
   static const List<Widget> _screens = [
     DownloadsScreen(),
@@ -81,15 +82,49 @@ class _MainScreenState extends State<MainScreen> {
   
   // Método para iniciar servidor y después servicios
   Future<void> _startServerAndInitServices() async {
-    print('\n=== Iniciando servidor Go ===');
-    await ServerLauncher().startServer();
-    print('ServerLauncher.startServer() completado');
-    
-    // Pequeño delay para asegurar que el servidor esté listo
-    await Future.delayed(const Duration(milliseconds: 500));
     setState(() {
-      _serverStarted = true;
+      _statusMessage = 'Starting server...';
     });
+
+    try {
+      await ServerLauncher().startServer();
+      
+      setState(() {
+        _statusMessage = 'Connecting to server...';
+      });
+
+      // Intentar conectar con timeout
+      bool connected = false;
+      for (int i = 0; i < 3 && !connected; i++) {
+        try {
+          await Future.delayed(Duration(seconds: 1));
+          setState(() {
+            _statusMessage = 'Connecting to server (attempt ${i + 1}/3)...';
+          });
+          
+          // Verificar si el servidor está corriendo
+          if (!ServerLauncher().isRunning) {
+            throw Exception('Server not running');
+          }
+          
+          connected = true;
+        } catch (e) {
+          print('Connection attempt $i failed: $e');
+        }
+      }
+
+      if (!connected) {
+        throw Exception('Could not connect to server');
+      }
+
+      setState(() {
+        _serverStarted = true;
+      });
+    } catch (e) {
+      setState(() {
+        _statusMessage = 'Error: $e\nTap to retry';
+      });
+    }
   }
 
   @override
@@ -207,14 +242,19 @@ class _MainScreenState extends State<MainScreen> {
               children: [
                 // Show loading if server not started yet
                 if (!_serverStarted)
-                  const Expanded(
+                  Expanded(
                     child: Center(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           CircularProgressIndicator(),
                           SizedBox(height: 16),
-                          Text('Starting server...'),
+                          Text(_statusMessage),
+                          if (_statusMessage.contains('Error'))
+                            TextButton(
+                              onPressed: _startServerAndInitServices,
+                              child: Text('Retry'),
+                            ),
                         ],
                       ),
                     ),

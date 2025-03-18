@@ -29,17 +29,14 @@ class WebSocketConnector {
   bool get isConnected => _isConnected;
 
   Future<void> connect() async {
-    // Si ya estamos conectados, no hacer nada
     if (_isConnected) return;
     
-    // Si ya estamos conectando, esperar a que termine
     if (_isConnecting) {
       print('Connection already in progress, waiting...');
       await _connectionLock.future;
       return;
     }
 
-    // Adquirir lock para conexión
     _isConnecting = true;
     final connectionCompleter = Completer<void>();
     _connectionLock = connectionCompleter;
@@ -48,28 +45,35 @@ class WebSocketConnector {
       _statusController.add(ConnectionStatus.connecting);
       print('Attempting WebSocket connection...');
 
-      // Cerrar cualquier canal existente primero
-      await _closeExistingChannel();
+      // Esperar a que el servidor esté listo
+      await Future.delayed(Duration(milliseconds: 500));
 
-      // Crear nuevo canal
-      _channel = WebSocketChannel.connect(Uri.parse('ws://localhost:8080/ws'));
+      // Intentar conexión con timeout más largo
+      for (int i = 0; i < 3; i++) {
+        try {
+          await _closeExistingChannel();
+          
+          _channel = WebSocketChannel.connect(Uri.parse('ws://localhost:8080/ws'));
+          await _channel!.ready.timeout(
+            Duration(seconds: 5),
+            onTimeout: () => throw TimeoutException('Connection timeout'),
+          );
+          
+          _setupListeners();
+          _startPingTimer();
+          
+          _isConnected = true;
+          _reconnectAttempts = 0;
+          _statusController.add(ConnectionStatus.connected);
+          print('WebSocket connected successfully');
+          return;
+        } catch (e) {
+          print('Connection attempt $i failed: $e');
+          await Future.delayed(Duration(seconds: 1));
+        }
+      }
       
-      // Esperar a que esté listo
-      await _channel!.ready.timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => throw TimeoutException('Connection timed out after 5s'),
-      );
-      
-      // Configurar listeners
-      _setupListeners();
-      _startPingTimer();
-      
-      // Actualizar estado
-      _isConnected = true;
-      _reconnectAttempts = 0;
-      _statusController.add(ConnectionStatus.connected);
-      print('WebSocket connected successfully');
-
+      throw Exception('Failed to connect after retries');
     } catch (e) {
       print('WebSocket connection failed: $e');
       _handleDisconnect();

@@ -364,33 +364,30 @@ class DownloadService {
       item.addLog('❌ Error: $errorMessage');
     }
     
-    // Intentar retry automático
+    // Retry más agresivo para errores de red
     final retryCount = _retryCount[url] ?? 0;
     if (retryCount < _maxRetries) {
       _retryCount[url] = retryCount + 1;
-      final delay = Duration(seconds: (retryCount + 1) * 2);
+      final delay = Duration(seconds: retryCount + 1); // Delay más corto
       
-      item.addLog('🔄 Retry ${retryCount + 1}/$_maxRetries in ${delay.inSeconds}s...');
+      item.addLog('🔄 Auto-retry ${retryCount + 1}/$_maxRetries in ${delay.inSeconds}s...');
       item.status = DownloadStatus.paused;
       
-      // Cancelar retry anterior si existe
       _retryTimers[url]?.cancel();
-      
-      // Programar nuevo retry
       _retryTimers[url] = Timer(delay, () {
         if (_downloads.containsKey(url)) {
-          item.addLog('🔄 Auto-resuming download...');
+          item.addLog('🔄 Resuming download...');
           resumeDownload(url);
         }
       });
     } else {
-      // Fallo definitivo después de todos los reintentos
+      // Mantener la descarga pero marcarla como error
       item.status = DownloadStatus.error;
       item.error = errorMessage;
       item.addLog('💔 Download failed after $_maxRetries retries');
+      // No remover la descarga para permitir retry manual
+      _downloadController.add(item);
     }
-    
-    _downloadController.add(item);
   }
 
   void _handleLogMessage(Map<String, dynamic> data) {
