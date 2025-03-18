@@ -25,10 +25,11 @@
   - [x] Cancel download with proper cleanup
   - [x] Safe download restart
   - [x] Client-server download synchronization
-  - [ ] Proper pause/resume
-  - [x] Auto-retry on failures
+  - [x] Chunked downloading via multiple connections
+  - [x] Chunk progress visualization
+  - [ ] Proper pause/resume with state preservation
+  - [x] Auto-retry on failures with exponential backoff
   - [x] SHA-256 verification
-  - [ ] Multi-connection downloads
   - [ ] Download persistence across restarts
   - [ ] Download queue management
 
@@ -43,6 +44,14 @@
 - [x] Prevent app crashes on network errors
 - [x] Fix duplicate download item issues
 - [x] Improve client-server state synchronization
+- [x] Fix chunked downloads visualization
+
+## Current Issues To Fix 🔧
+- [ ] Fix visualization of chunks (currently only appears when paused)
+- [ ] Fix issue with downloads stalling at ~85%
+- [ ] Improve retry mechanism for more reliability
+- [ ] Fix chunks not being properly tracked in UI
+- [ ] Optimize checksum calculation for large files
 
 ## Achievements & Work in Progress
 
@@ -51,8 +60,9 @@
 - Real-time progress tracking with millisecond precision
 - Enhanced download statistics (speed, ETA, average speed)
 - Live download logs with formatted timestamps
+- Chunked downloads for better performance
 - Basic SHA-256 verification
-- Auto-retry mechanism for network issues
+- Auto-retry mechanism for network issues with exponential backoff
 - WebSocket-based communication
 - Connection status indicators
 - Basic error handling and recovery
@@ -66,29 +76,27 @@
 - Proper client-server coordination for downloads
 
 ### 🚧 In Progress - Server Improvements
-- Chunked downloads support
-- True pause/resume functionality
-- Multi-connection downloads
-- Recovery system for interrupted downloads
+- True pause/resume functionality with state preservation
+- Better recovery system for interrupted downloads
 - Better handling of slow connections
-- HTTP range and header support
+- HTTP range and header support optimization
 - Optimized checksum calculation (current: ~180s)
+- Persistent download tracking
 
 ### 🚧 In Progress - Client Improvements
-- Individual chunk progress tracking
+- Always-visible individual chunk progress tracking
 - Enhanced UI for multi-connection downloads
 - Better error feedback and handling
 - Robust download queue system
 - Download persistence across sessions
 - Custom download directory support
-- Browser extension integration
 
 ## Backlog
-- [ ] Optimize SHA-256 calculation for large files
 - [ ] Browser extension
 - [ ] Settings
   - [ ] Custom download directory
   - [ ] Speed limits
   - [ ] Concurrent connections
-- [ ] Multi-download
-- [ ] Themes (GTK/System)
+  - [ ] Default chunk size
+- [ ] Multi-file downloads
+- [ ] Themes (GTK/System integration)
