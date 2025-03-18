@@ -86,6 +86,12 @@ class DownloadItem {
     final minutes = timestamp.minute.toString().padLeft(2, '0');
     final seconds = timestamp.second.toString().padLeft(2, '0');
     final time = '$hours:$minutes:$seconds';
+    
+    // Limitar el tamaño de los logs para evitar problemas de memoria
+    if (logs.length > 500) {
+      logs.removeRange(0, 100); // Eliminar los 100 logs más antiguos
+    }
+    
     logs.add('[$time] $message');
   }
 

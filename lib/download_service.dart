@@ -2,16 +2,16 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'dart:convert';
-import 'dart:typed_data';  // Para Uint8List
-import 'package:flutter/foundation.dart';  // Para compute()
-import 'package:flutter/widgets.dart';     // Para WidgetsBinding
-import 'package:crypto/crypto.dart';       // Para sha256
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'download_item.dart';
 import 'download_progress.dart';
-import 'websocket_connector.dart';  // Actualizar importación
+import 'websocket_connector.dart';
 
 class DownloadService {
   static final DownloadService _instance = DownloadService._internal();
@@ -33,6 +33,10 @@ class DownloadService {
   // Lista de descargas
   Stream<DownloadItem> get downloadStream => _downloadController.stream;
   List<DownloadItem> get downloads => _downloads.values.toList();
+
+  // Agregar un conjunto para rastrear URLs canceladas recientemente
+  final Set<String> _recentlyCancelled = {};
+  final _recentCancelDuration = Duration(seconds: 10);
 
   Future<void> init() async {
     if (_downloadController.isClosed) {
@@ -82,8 +86,13 @@ class DownloadService {
           case 'log':
             _handleLogMessage(data);
             break;
+          case 'cancel_confirmed':
+            _handleCancelConfirmation(data);
+            break;
+          case 'server_info':
+            _handleServerInfo(data);
+            break;
           case 'pong':
-            // Solo debug log
             if (kDebugMode) print('Pong received from server');
             break;
           default:
@@ -117,19 +126,16 @@ class DownloadService {
         }
       }
 
-      // Verificar si ya existe
-      if (_downloads.containsKey(url)) {
-        final existing = _downloads[url]!;
-        if (existing.status == DownloadStatus.completed) {
-          throw Exception('This file has already been downloaded.');
-        } else if (existing.status == DownloadStatus.downloading) {
-          throw Exception('This file is already being downloaded.');
-        } else {
-          // Reanudar descarga existente
-          resumeDownload(url);
-          return;
-        }
+      // Verificar si fue cancelada recientemente
+      if (_recentlyCancelled.contains(url)) {
+        print('URL was recently cancelled, waiting a moment before restarting...');
+        await Future.delayed(Duration(seconds: 1));
+        _recentlyCancelled.remove(url);
       }
+
+      // Antes de hacer cualquier otra cosa, limpiar cualquier rastro de descarga anterior
+      // para evitar problemas al reiniciar una descarga previamente cancelada
+      _downloads.remove(url);
 
       // Crear nueva descarga
       final filename = url.split('/').last;
@@ -154,22 +160,17 @@ class DownloadService {
       print('Error starting download: $e');
       
       // Crear o actualizar item con error
-      DownloadItem item;
-      if (_downloads.containsKey(url)) {
-        item = _downloads[url]!;
-      } else {
-        item = DownloadItem(
-          url: url,
-          filename: url.split('/').last,
-          totalBytes: 0,
-          status: DownloadStatus.error,
-        );
-        _downloads[url] = item;
-      }
+      DownloadItem item = DownloadItem(
+        url: url,
+        filename: url.split('/').last,
+        totalBytes: 0,
+        status: DownloadStatus.error,
+      );
       
       item.status = DownloadStatus.error;
       item.error = e.toString();
       item.addLog('❌ Error: ${e.toString()}');
+      _downloads[url] = item;
       _downloadController.add(item);
     }
   }
@@ -212,6 +213,14 @@ class DownloadService {
   void cancelDownload(String url) {
     print('Canceling download: $url');
     
+    // Marcar URL como recientemente cancelada para evitar conflictos
+    _recentlyCancelled.add(url);
+    
+    // Programar su eliminación del conjunto después de un tiempo
+    Timer(_recentCancelDuration, () {
+      _recentlyCancelled.remove(url);
+    });
+    
     final item = _downloads[url];
     if (item == null) return;
     
@@ -222,8 +231,14 @@ class DownloadService {
     
     item.addLog('❌ Download canceled');
     item.status = DownloadStatus.error;
-    _downloads.remove(url);
+    
+    // Notificar a la UI
     _downloadController.add(item);
+    
+    // Eliminar definitivamente del mapa INMEDIATAMENTE
+    _downloads.remove(url);
+    
+    print('Download $url completely removed from tracking');
   }
 
   Stream<String> get progressStream => _connector.messageStream;
@@ -241,60 +256,79 @@ class DownloadService {
 
   void _handleProgressUpdate(Map<String, dynamic> data) {
     final url = data['url'];
+    
+    // Ignorar actualización si la URL fue recientemente cancelada
+    if (_recentlyCancelled.contains(url)) {
+      print('Ignoring progress update for cancelled download: $url');
+      return;
+    }
+    
     final item = _downloads[url];
     
     if (item != null) {
-      // Actualizar estado del item
-      item.downloadedBytes = data['bytesReceived'] ?? 0;
-      item.totalBytes = data['totalBytes'] ?? 0;
-      
-      // Actualizar velocidad con historial
-      item.updateSpeed((data['speed'] ?? 0.0).toDouble());
-      
-      // Calcular progreso
-      if (item.totalBytes > 0) {
-        // Guardar el progreso anterior para comparar
-        final oldProgress = item.progress;
+      try {
+        // Actualizar estado del item
+        item.downloadedBytes = data['bytesReceived'] ?? 0;
+        item.totalBytes = data['totalBytes'] ?? 0;
         
-        // Actualizar progreso
-        item.progress = item.downloadedBytes / item.totalBytes;
-        
-        // Convertir a cadena para asegurar que capturamos cambios decimales
-        final newProgressStr = item.formattedProgress;
-        final oldProgressStr = (oldProgress * 100).toStringAsFixed(1) + '%';
-        
-        // Mostrar log para cada cambio en el progreso, incluso decimales
-        if (newProgressStr != oldProgressStr) {
-          // Usar icono simple
-          item.addLog('📥 $newProgressStr');
+        // Actualizar velocidad con historial
+        double speed = 0.0;
+        final rawSpeed = data['speed'];
+        if (rawSpeed is double) {
+          speed = rawSpeed;
+        } else if (rawSpeed is int) {
+          speed = rawSpeed.toDouble();
         }
-      }
-
-      // Manejar diferentes estados
-      final status = data['status'] as String? ?? 'downloading';
-      switch(status) {
-        case 'starting':
-          item.status = DownloadStatus.downloading;
-          item.addLog('📄 File size: ${item.formattedSize}');
-          break;
+        
+        item.updateSpeed(speed);
+        
+        // Calcular progreso
+        if (item.totalBytes > 0) {
+          // Guardar el progreso anterior para comparar
+          final oldProgress = item.progress;
           
-        case 'downloading':
-          item.status = DownloadStatus.downloading;
-          // Resetear contadores de retry si hay progreso
-          _retryCount.remove(url);
-          break;
+          // Actualizar progreso
+          item.progress = item.downloadedBytes / item.totalBytes;
           
-        case 'completed':
-          item.status = DownloadStatus.completed;
-          item.progress = 1.0;
-          item.addLog('✅ Download completed successfully');
-          // Calcular checksum en background
-          _verifyChecksum(item);
-          break;
-      }
+          // Convertir a cadena para asegurar que capturamos cambios decimales
+          final newProgressStr = item.formattedProgress;
+          final oldProgressStr = (oldProgress * 100).toStringAsFixed(1) + '%';
+          
+          // Mostrar log para cada cambio en el progreso, incluso decimales
+          if (newProgressStr != oldProgressStr) {
+            // Usar icono simple
+            item.addLog('📥 $newProgressStr');
+          }
+        }
 
-      // Notificar UI de cambios
-      _downloadController.add(item);
+        // Manejar diferentes estados
+        final status = data['status'] as String? ?? 'downloading';
+        switch(status) {
+          case 'starting':
+            item.status = DownloadStatus.downloading;
+            item.addLog('📄 File size: ${item.formattedSize}');
+            break;
+            
+          case 'downloading':
+            item.status = DownloadStatus.downloading;
+            // Resetear contadores de retry si hay progreso
+            _retryCount.remove(url);
+            break;
+            
+          case 'completed':
+            item.status = DownloadStatus.completed;
+            item.progress = 1.0;
+            item.addLog('✅ Download completed successfully');
+            // Calcular checksum en background
+            _verifyChecksum(item);
+            break;
+        }
+
+        // Notificar UI de cambios
+        _downloadController.add(item);
+      } catch (e) {
+        print('Error processing progress update: $e');
+      }
     }
   }
 
@@ -350,6 +384,13 @@ class DownloadService {
 
   void _handleErrorMessage(Map<String, dynamic> data) {
     final url = data['url'] as String;
+    
+    // Ignorar errores si la URL fue recientemente cancelada
+    if (_recentlyCancelled.contains(url)) {
+      print('Ignoring error message for cancelled download: $url');
+      return;
+    }
+    
     final errorMessage = data['message'] as String? ?? 'Unknown error';
     
     final item = _downloads[url];
@@ -392,6 +433,13 @@ class DownloadService {
 
   void _handleLogMessage(Map<String, dynamic> data) {
     final url = data['url'] as String;
+    
+    // Ignorar mensajes si la URL fue recientemente cancelada
+    if (_recentlyCancelled.contains(url)) {
+      print('Ignoring log message for cancelled download: $url');
+      return;
+    }
+    
     final message = data['message'] as String;
     
     final item = _downloads[url];
@@ -403,11 +451,40 @@ class DownloadService {
       formattedMessage = '📊 $message';
     } else if (message.contains('Starting')) {
       formattedMessage = '🚀 $message';
+    } else if (message.contains('Resuming')) {
+      formattedMessage = '▶️ $message';
     } else {
       formattedMessage = '💬 $message';
     }
     
     item.addLog(formattedMessage);
+    print('Log added to download: $formattedMessage');
+    
+    // Asegurarnos de notificar a los listeners
     _downloadController.add(item);
+  }
+
+  // Manejar confirmación de cancelación del servidor  
+  void _handleCancelConfirmation(Map<String, dynamic> data) {
+    final url = data['url'] as String;
+    print('Server confirmed cancellation of $url');
+    
+    // Asegurarnos que la URL esté marcada como recientemente cancelada
+    _recentlyCancelled.add(url);
+    
+    // Programar su eliminación del conjunto después de un tiempo
+    Timer(_recentCancelDuration, () {
+      _recentlyCancelled.remove(url);
+    });
+  }
+
+  // Manejar información del servidor
+  void _handleServerInfo(Map<String, dynamic> data) {
+    print('Server capabilities:');
+    print('- Implementation: ${data['implementation']}');
+    print('- Features: ${data['features']}');
+    print('- Chunks supported: ${data['chunks_supported']}');
+    
+    // Aquí podríamos guardar esta información para adaptar la UI
   }
 }

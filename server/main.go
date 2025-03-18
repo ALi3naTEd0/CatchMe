@@ -37,7 +37,40 @@ func (sc *SafeConn) SendText(message string) error {
     return sc.conn.WriteMessage(websocket.TextMessage, []byte(message))
 }
 
+// Agregamos un mapa para rastrear las descargas activas en el servidor
+var (
+    activeDownloads     = make(map[string]bool)
+    activeDownloadsMux  sync.Mutex
+)
+
+// Función para marcar una descarga como activa
+func markDownloadActive(url string) {
+    activeDownloadsMux.Lock()
+    defer activeDownloadsMux.Unlock()
+    activeDownloads[url] = true
+    log.Printf("Download tracked: %s", url)
+}
+
+// Función para verificar si una descarga está activa
+func isDownloadActive(url string) bool {
+    activeDownloadsMux.Lock()
+    defer activeDownloadsMux.Unlock()
+    return activeDownloads[url]
+}
+
+// Función para marcar una descarga como cancelada/terminada
+func markDownloadInactive(url string) {
+    activeDownloadsMux.Lock()
+    defer activeDownloadsMux.Unlock()
+    delete(activeDownloads, url)
+    log.Printf("Download untracked: %s", url)
+}
+
 func handleDownload(safeConn *SafeConn, url string) {
+    // Marcamos la URL como activa
+    markDownloadActive(url)
+    defer markDownloadInactive(url) // Asegurarnos de que se elimine al finalizar
+    
     log.Printf("Starting/Resuming download: %s", url)
     
     client := &http.Client{
@@ -63,6 +96,12 @@ func handleDownload(safeConn *SafeConn, url string) {
         return
     }
     totalSize := head.ContentLength
+
+    // Verificar si la descarga sigue activa después de inicialización
+    if !isDownloadActive(url) {
+        log.Printf("Download was cancelled during initialization: %s", url)
+        return
+    }
 
     // Intentar la descarga con retries
     var resp *http.Response
@@ -128,8 +167,13 @@ func handleDownload(safeConn *SafeConn, url string) {
     reportTicker := time.NewTicker(100 * time.Millisecond)
     defer reportTicker.Stop()
 
+    // Ticker modificado para verificar cancellation
     go func() {
         for range reportTicker.C {
+            if !isDownloadActive(url) {
+                return // Salir del goroutine si se ha cancelado
+            }
+            
             if downloaded > 0 {
                 speed := float64(downloaded) / time.Since(startTime).Seconds()
                 sendProgress(safeConn, url, downloaded, totalSize, speed)
@@ -138,6 +182,12 @@ func handleDownload(safeConn *SafeConn, url string) {
     }()
 
     for {
+        // Verificar si la descarga ha sido cancelada
+        if !isDownloadActive(url) {
+            log.Printf("Download cancelled during transfer: %s", url)
+            return
+        }
+        
         n, err := resp.Body.Read(buffer)
         if n > 0 {
             _, writeErr := file.Write(buffer[:n])
@@ -211,6 +261,13 @@ func sendProgress(safeConn *SafeConn, url string, bytesReceived, totalBytes int6
     }
 }
 
+// Constantes para información del cliente
+const (
+    ImplementationInfo = "CatchMe v1.0.0"
+    FeaturesSupported = "basic-download retry-mechanism"
+    ChunksSupported = false
+)
+
 func handleWS(w http.ResponseWriter, r *http.Request) {
     // Mejorar el log con información de cliente
     log.Printf("WebSocket connection request from %s", r.RemoteAddr)
@@ -228,6 +285,16 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
     conn.SetReadDeadline(time.Time{})
     
     log.Printf("Client connected: %s", r.RemoteAddr)
+    
+    // Enviar info al cliente sobre capacidades del servidor cuando se conecta
+    serverInfo := map[string]interface{}{
+        "type": "server_info",
+        "implementation": ImplementationInfo,
+        "features": FeaturesSupported,
+        "chunks_supported": ChunksSupported,
+    }
+    
+    safeConn.SendJSON(serverInfo)
     
     // Cleanup al finalizar
     defer func() {
@@ -260,9 +327,26 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
         case "start_download":
             if url, ok := msg["url"].(string); ok {
                 log.Printf("Download request for: %s", url)
-                go handleDownload(safeConn, url)
+                
+                // Verificar si ya existe una descarga activa con esta URL
+                if isDownloadActive(url) {
+                    log.Printf("URL already being downloaded: %s", url)
+                    sendMessage(safeConn, "error", url, "This URL is already being downloaded")
+                } else {
+                    go handleDownload(safeConn, url)
+                }
             } else {
                 log.Printf("Invalid download request, missing URL")
+            }
+        case "cancel_download":
+            if url, ok := msg["url"].(string); ok {
+                log.Printf("Canceling download for: %s", url)
+                // Marcar como inactivo inmediatamente
+                markDownloadInactive(url)
+                
+                // Enviar confirmación al cliente
+                sendMessage(safeConn, "log", url, "Download canceled by user")
+                sendMessage(safeConn, "cancel_confirmed", url, "Download canceled successfully")
             }
         case "resume_download":
             if url, ok := msg["url"].(string); ok {

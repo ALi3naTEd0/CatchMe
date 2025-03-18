@@ -79,7 +79,22 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
 
   void _startDownload(BuildContext context, String url) {
     print('Attempting to start download: $url');
-    _downloadService.startDownload(url);
+    try {
+      _downloadService.startDownload(url).catchError((error) {
+        // Mostrar error en SnackBar para mejorar UX
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${error.toString()}')),
+        );
+      });
+    } catch (e) {
+      print('Error starting download: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    }
+    
+    // Limpiar campo después de iniciar descarga
+    _urlController.clear();
   }
 
   @override
@@ -346,24 +361,31 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                       maxHeight: 150,  // Más alto para mostrar más logs
                       minHeight: 80,  // Altura mínima para que siempre se vea bien
                     ),
-                    child: ListView.builder(
-                      reverse: true,
-                      itemCount: download.logs.length,
-                      padding: EdgeInsets.zero,
-                      itemExtent: 18.0, // Altura fija por elemento para scroll uniforme
-                      itemBuilder: (_, i) => Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 1),
-                        child: Text(
-                          download.logs[download.logs.length - i - 1],
-                          style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 11,
-                            color: Colors.white70,
-                            height: 1.2,
+                    child: download.logs.isEmpty 
+                      ? Center(
+                          child: Text(
+                            'No logs available',
+                            style: TextStyle(color: Colors.grey[600], fontStyle: FontStyle.italic),
+                          ),
+                        )
+                      : ListView.builder(
+                          reverse: true,
+                          itemCount: download.logs.length,
+                          padding: EdgeInsets.zero,
+                          itemExtent: 18.0, // Altura fija por elemento para scroll uniforme
+                          itemBuilder: (_, i) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 1),
+                            child: Text(
+                              download.logs[download.logs.length - i - 1],
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 11,
+                                color: Colors.white70,
+                                height: 1.2,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                    ),
                   ),
               ],
             ),
