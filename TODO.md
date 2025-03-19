@@ -52,6 +52,9 @@
 - [x] Improve download performance with increased buffer sizes ⭐NEW
 
 ## Current Issues To Fix 🔧
+- [ ] Fix pause/resume functionality not working properly
+- [ ] Fix downloads restarting unexpectedly instead of completing
+- [ ] Improve chunk visualization: hide completed/pending chunks and only show active ones
 - [ ] Fix visualization of chunks not always appearing consistently
 - [ ] Fix issue with downloads stalling at ~85% on some servers
 - [ ] Add more robust recovery mechanism for network issues
