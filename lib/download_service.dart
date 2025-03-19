@@ -612,36 +612,100 @@ class DownloadService {
     final url = data['url'] as String;
     final chunkData = data['chunk'] as Map<String, dynamic>;
     
-    // Ignorar si la URL está en la lista de canceladas
-    if (_recentlyCancelled.contains(url)) {
-      print('Ignoring chunk progress for cancelled download: $url');
-      return;
-    }
+    // Ignorar mensajes de chunks de descargas canceladas
+    if (_recentlyCancelled.contains(url)) return;
     
     final item = _downloads[url];
     if (item == null) return;
     
-    // No procesar más actualizaciones de chunks si la descarga ya está completada
-    if (item.status == DownloadStatus.completed) {
-      print('Ignoring chunk progress for completed download: $url');
-      return;
-    }
+    // No procesar actualizaciones para descargas ya completadas
+    if (item.status == DownloadStatus.completed) return;
     
     final chunk = ChunkInfo.fromJson(chunkData);
     
-    // Debug: Imprimir actualizaciones de chunk para monitorear
-    print('Chunk ${chunk.id} updated: progress=${chunk.progress}, status=${chunk.status}');
-    
-    // Actualizar el chunk en el objeto download
+    // Actualizar el chunk en el mapa
     item.updateChunk(chunk);
     
-    // Añadir log solo para cambios significativos
-    if (chunk.progress > 0 && chunk.progress % (1024*1024) < 1024*10) { // Cada ~1MB
-      final chunkProgress = (chunk.progress * 100 / (chunk.end - chunk.start + 1)).toStringAsFixed(0);
-      item.addLog('🧩 Chunk ${chunk.id+1}: $chunkProgress% at ${_formatSpeed(chunk.speed)}');
+    // Para reducir la carga en la UI, no actualizamos en cada mensaje
+    // sino solo periódicamente o cuando hay cambios significativos
+    
+    // Variables para control de frecuencia de actualizaciones
+    final now = DateTime.now();
+    final shouldUpdateUI = item.lastProgressLog == null || 
+        now.difference(item.lastProgressLog!) > Duration(milliseconds: 500);
+    
+    if (shouldUpdateUI || chunk.status == 'completed') {
+      item.lastProgressLog = now;
+      _updateOverallProgress(item);
+      
+      // Añadir log solo para cambios significativos - reducido a uno por cada ~10MB
+      if (chunk.progress > 0 && 
+          (chunk.progress % (10*1024*1024) < 1024*100) && 
+          chunk.status == 'active') {
+        final chunkProgress = (chunk.progress * 100 / (chunk.end - chunk.start + 1)).toStringAsFixed(0);
+        item.addLog('🧩 Chunk ${chunk.id+1}: $chunkProgress% at ${_formatSpeed(chunk.speed)}');
+      }
+    }
+  }
+
+  // Método para calcular y actualizar el progreso general basado en chunks - simplificado para asegurar funcionamiento
+  void _updateOverallProgress(DownloadItem item) {
+    // Saltear si no hay chunks
+    if (item.chunks.isEmpty) {
+      return;
     }
     
-    // Actualizar UI inmediatamente
+    double totalDownloaded = 0;
+    double totalSize = 0;
+    double totalSpeed = 0;
+    int activeChunks = 0;
+    
+    // Calcular progreso simple sumando bytes
+    for (final chunk in item.chunks.values) {
+      // Calcular el tamaño total de este chunk
+      double chunkSize = (chunk.end - chunk.start + 1).toDouble();
+      totalSize += chunkSize;
+      
+      if (chunk.status == 'completed') {
+        // Chunk completo, contar todo
+        totalDownloaded += chunkSize;
+      } else if (chunk.status == 'active' && chunk.progress > 0) {
+        // Chunk en progreso, contar lo descargado
+        totalDownloaded += chunk.progress.toDouble();
+        
+        // Sumar velocidad si está activo
+        totalSpeed += chunk.speed;
+        activeChunks++;
+      }
+    }
+    
+    if (totalSize > 0) {
+      // Variables para controlar si debemos registrar un log
+      final oldProgress = item.progress;
+      final oldProgressInt = (oldProgress * 100).floor();
+      
+      // Establecer valores calculados directamente
+      item.totalBytes = totalSize.toInt();
+      item.downloadedBytes = totalDownloaded.toInt();
+      item.progress = totalDownloaded / totalSize;
+      
+      // Debug para ver qué está pasando
+      print('Progress updated: ${(item.progress * 100).toStringAsFixed(1)}% - $totalDownloaded/$totalSize bytes');
+      
+      // Sólo añadir log para cambios significativos (cada 1%)
+      final newProgressInt = (item.progress * 100).floor();
+      if (newProgressInt > oldProgressInt) {
+        final progressPercent = (item.progress * 100).toStringAsFixed(1);
+        item.addLog('📥 $progressPercent%');
+      }
+      
+      // Actualizar velocidad
+      if (activeChunks > 0 && totalSpeed > 0) {
+        item.updateSpeed(totalSpeed);
+      }
+    }
+    
+    // SIEMPRE notificar cambios al stream para actualizar la UI
     _downloadController.add(item);
   }
 

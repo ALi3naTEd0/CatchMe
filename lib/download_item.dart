@@ -13,10 +13,14 @@ class DownloadItem {
   double currentSpeed;
   double averageSpeed;
   DownloadStatus status;
+  String? tempStatus;  // Para estados transitorios en UI (pausing, resuming)
   String? error;
   final DateTime startTime;
   String? checksum;  // Añadir campo para guardar el SHA
   List<String> logs = [];  // Añadir logs de la descarga
+  
+  // Añadir para rastrear último log de progreso
+  DateTime? lastProgressLog;
 
   // Mapa para almacenar información de chunks
   final Map<int, dynamic> chunks = {};
@@ -37,6 +41,7 @@ class DownloadItem {
     this.currentSpeed = 0.0,
     this.averageSpeed = 0.0,
     this.status = DownloadStatus.queued,
+    this.tempStatus,
     this.error,
   }) : startTime = DateTime.now();
 
@@ -78,7 +83,7 @@ class DownloadItem {
   String get elapsed {
     final duration = DateTime.now().difference(startTime);
     final hours = duration.inHours.toString().padLeft(2, '0');
-    final minutes = (duration.inMinutes % 60).toString().padLeft(2, '0');
+    final minutes = duration.inMinutes.toString().padLeft(2, '0');
     final secs = (duration.inSeconds % 60).toString().padLeft(2, '0');
     return '$hours:$minutes:$secs';
   }
@@ -138,5 +143,11 @@ class DownloadItem {
       _speedSampleCount = 0;
       _lastSpeedUpdate = now;
     }
+  }
+
+  // Método simplificado para actualizar un chunk (no hacer cálculos aquí)
+  void updateChunk(ChunkInfo chunkInfo) {
+    // Simplemente guardar el chunk en el mapa
+    chunks[chunkInfo.id] = chunkInfo;
   }
 }

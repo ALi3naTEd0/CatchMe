@@ -18,10 +18,22 @@ var (
 	activeDownloadsMutex  sync.RWMutex
 )
 
+// Estructura para hacer seguimiento del estado de descargas
+type downloadState struct {
+    active bool
+    paused bool
+}
+
+// Cambiamos el mapa para almacenar estados más complejos
+var (
+    activeDownloadsState = make(map[string]downloadState)
+    activeDownloadsMux  sync.Mutex
+)
+
 // Constantes de configuración
 const (
-	DefaultChunkSize   int64 = 10 * 1024 * 1024  // Aumentar a 10MB por defecto (era 5MB)
-	MaxConcurrentChunks      = 5                 // Aumentar a 5 chunks concurrentes (era 3)
+	DefaultChunkSize   int64 = 30 * 1024 * 1024  // Aumentar a 30MB por chunk (antes era 10MB)
+	MaxConcurrentChunks      = 8                 // Aumentar a 8 chunks concurrentes (antes era 5)
 )
 
 // handleChunkedDownload inicia una descarga por chunks (función de proxy con nombre que coincide con main.go)
@@ -68,11 +80,8 @@ func startChunkedDownload(safeConn *SafeConn, url string) {
 	}
 
 	// Verificar si el servidor soporta rangos
-	// Comentar la variable supportsRanges ya que no se usa
-	// supportsRanges := false
 	acceptRanges := resp.Header.Get("Accept-Ranges")
 	if acceptRanges == "bytes" {
-		// supportsRanges = true
 		sendMessage(safeConn, "log", url, "Server supports range requests, enabling chunked download")
 	} else {
 		sendMessage(safeConn, "log", url, "Server doesn't support range requests, using single connection")
@@ -153,8 +162,8 @@ func startChunkedDownload(safeConn *SafeConn, url string) {
 				DisableCompression:    true,
 				ForceAttemptHTTP2:     true,
 				DisableKeepAlives:     false,        // Asegurar que keep-alives esté habilitado
-				MaxConnsPerHost:       10,           // Aumentar conexiones por host
-				ResponseHeaderTimeout: 15 * time.Second,
+				MaxConnsPerHost:       20,           // Aumentar conexiones por host (antes 10)
+				ResponseHeaderTimeout: 30 * time.Second, // Aumentar timeout (antes 15s)
 				TLSHandshakeTimeout:   10 * time.Second,
 			},
 		}
@@ -232,118 +241,223 @@ func startChunkedDownload(safeConn *SafeConn, url string) {
 	}()
 }
 
-// Mejorar la función pauseChunkedDownload para enviar una confirmación más clara
+// Función mejorada para pausar una descarga por chunks
 func pauseChunkedDownload(safeConn *SafeConn, url string) {
-	activeDownloadsMutex.RLock()
-	download, exists := activeDownloadsMap[url]
-	activeDownloadsMutex.RUnlock()
+    log.Printf("Server: Pausing download: %s", url)
+    
+    activeDownloadsMutex.RLock()
+    download, exists := activeDownloadsMap[url]
+    activeDownloadsMutex.RUnlock()
 
-	if !exists {
-		sendMessage(safeConn, "error", url, "No active download found to pause")
-		return
-	}
+    if !exists {
+        // También verificar en el mapa tradicional
+        activeDownloadsMux.Lock()
+        state, exists := activeDownloadsState[url]
+        activeDownloadsMux.Unlock()
+        
+        if (!exists || !state.active) {
+            log.Printf("No download found to pause: %s", url)
+            sendMessage(safeConn, "error", url, "No active download found to pause")
+            return
+        }
+        
+        // Si está en el mapa tradicional pero no en el de chunks
+        // Necesitamos detener la descarga tradicional
+        activeDownloadsMux.Lock()
+        state.paused = true
+        activeDownloadsState[url] = state
+        activeDownloadsMux.Unlock()
+        
+        // Confirmar la pausa al cliente
+        sendMessage(safeConn, "pause_confirmed", url, "Download paused successfully")
+        return
+    }
 
-	// Pausar todos los chunks
-	download.PauseAllChunks()
-	
-	// Enviar mensaje detallado
-	sendMessage(safeConn, "log", url, "Download paused by user")
-	
-	// Notificar progreso actual para actualizar UI
-	downloaded, total := download.GetProgress()
-	progress := map[string]interface{}{
-		"type":          "progress",
-		"url":           url,
-		"bytesReceived": downloaded,
-		"totalBytes":    total,
-		"speed":         0,
-		"status":        "paused",
-	}
-	safeConn.SendJSON(progress)
-	
-	// Reportar estado actual de chunks para la UI
-	download.mu.RLock()
-	for _, chunk := range download.Chunks {
-		chunk.mu.Lock()
-		safeConn.SendJSON(map[string]interface{}{
-			"type": "chunk_progress",
-			"url":  url,
-			"chunk": ChunkProgress{
-				ID:       chunk.ID,
-				Start:    chunk.Start,
-				End:      chunk.End,
-				Progress: chunk.Progress,
-				Status:   chunk.Status,
-				Speed:    0,
-			},
-		})
-		chunk.mu.Unlock()
-	}
-	download.mu.RUnlock()
+    // Pausar todos los chunks
+    download.PauseAllChunks()
+    
+    // Enviar mensaje detallado de log
+    sendMessage(safeConn, "log", url, "Download paused by server")
+    
+    // Notificar progreso actual para actualizar UI
+    downloaded, total := download.GetProgress()
+    
+    // Enviar mensaje de pausa confirmada PRIMERO
+    sendMessage(safeConn, "pause_confirmed", url, "Download paused successfully")
+    
+    // Luego enviar actualización de progreso
+    progress := map[string]interface{}{
+        "type":          "progress",
+        "url":           url,
+        "bytesReceived": downloaded,
+        "totalBytes":    total,
+        "speed":         0,
+        "status":        "paused",
+    }
+    safeConn.SendJSON(progress)
+    
+    // Reportar estado actual de todos los chunks para la UI
+    download.mu.RLock()
+    for _, chunk := range download.Chunks {
+        chunk.mu.Lock()
+        safeConn.SendJSON(map[string]interface{}{
+            "type": "chunk_progress",
+            "url":  url,
+            "chunk": ChunkProgress{
+                ID:       chunk.ID,
+                Start:    chunk.Start,
+                End:      chunk.End,
+                Progress: chunk.Progress,
+                Status:   chunk.Status,
+                Speed:    0, // Velocidad cero al pausar
+            },
+        })
+        chunk.mu.Unlock()
+    }
+    download.mu.RUnlock()
+    
+    log.Printf("Download paused: %s", url)
 }
 
-// Mejorar resumeChunkedDownload para asegurar una reanudación apropiada
+// Función mejorada para reanudar una descarga por chunks
 func resumeChunkedDownload(safeConn *SafeConn, url string) {
-	// Verificar si existe una descarga pausada primero
-	activeDownloadsMutex.RLock()
-	download, exists := activeDownloadsMap[url]
-	activeDownloadsMutex.RUnlock()
-	
-	if exists {
-		// Si existe, actualizar estado y continuar con los chunks existentes
-		sendMessage(safeConn, "log", url, "Resuming existing download")
-		
-		// Iniciar nuevos goroutines para chunks pausados
-		go func() {
-			// Cliente HTTP para las descargas
-			downloadClient := &http.Client{
-				Timeout: 0, // Sin timeout
-				Transport: &http.Transport{
-					MaxIdleConns:        100,
-					IdleConnTimeout:     90 * time.Second,
-					DisableCompression:  true,
-					ForceAttemptHTTP2:   true,
-				},
-			}
-			
-			// Reanudar chunks pausados
-			var wg sync.WaitGroup
-			sem := make(chan struct{}, MaxConcurrentChunks)
-			
-			download.mu.RLock()
-			for _, chunk := range download.Chunks {
-				chunk.mu.Lock()
-				if chunk.Status == ChunkPaused {
-					currentChunk := chunk
-					chunk.Status = ChunkPending // Marcar como pendiente para reiniciar
-					chunk.cancelCtx = make(chan struct{}) // Nuevo canal
-					sem <- struct{}{}
-					wg.Add(1)
-					go func() {
-						defer func() {
-							<-sem
-							wg.Done()
-						}()
-						download.DownloadChunk(downloadClient, currentChunk, safeConn)
-					}()
-				}
-				chunk.mu.Unlock()
-			}
-			download.mu.RUnlock()
-			
-			// Esperar a que terminen todos los chunks
-			wg.Wait()
-			
-			// Verificar si se completó la descarga
-			if download.IsComplete() {
-				// Completar la descarga
-				handleCompletedDownload(safeConn, url, download)
-			}
-		}()
-	} else {
-		// No existe, iniciar como nueva descarga
-		startChunkedDownload(safeConn, url)
-	}
+    log.Printf("Server: Resuming download: %s", url)
+    
+    // Primero enviar confirmación de reanudación (importante para la UI)
+    sendMessage(safeConn, "resume_confirmed", url, "Download resumed successfully")
+    
+    // Verificar si existe una descarga pausada
+    activeDownloadsMutex.RLock()
+    download, exists := activeDownloadsMap[url]
+    activeDownloadsMutex.RUnlock()
+    
+    if exists {
+        log.Printf("Found existing download to resume: %s", url)
+        
+        // Si existe, actualizar estado y continuar con los chunks existentes
+        sendMessage(safeConn, "log", url, "Resuming existing download...")
+        
+        // Iniciar nuevos goroutines para chunks pausados
+        go func() {
+            // Cliente HTTP optimizado para las descargas
+            downloadClient := &http.Client{
+                Timeout: 0, // Sin timeout
+                Transport: &http.Transport{
+                    MaxIdleConns:        100,
+                    IdleConnTimeout:     90 * time.Second,
+                    DisableCompression:  true,
+                    ForceAttemptHTTP2:   true,
+                    MaxConnsPerHost:     10,
+                    TLSHandshakeTimeout: 10 * time.Second,
+                },
+            }
+            
+            // Reanudar chunks pausados con concurrencia controlada
+            var wg sync.WaitGroup
+            sem := make(chan struct{}, MaxConcurrentChunks)
+            
+            download.mu.RLock()
+            
+            // Contar cuántos chunks necesitan reanudarse
+            pendingChunks := 0
+            for _, chunk := range download.Chunks {
+                chunk.mu.Lock()
+                if chunk.Status == ChunkPaused || chunk.Status == ChunkPending {
+                    pendingChunks++
+                }
+                chunk.mu.Unlock()
+            }
+            
+            // Informar cuántos chunks se van a reanudar
+            if pendingChunks > 0 {
+                sendMessage(safeConn, "log", url, fmt.Sprintf("Resuming %d chunks...", pendingChunks))
+            }
+            
+            // Iniciar descarga de chunks pendientes
+            for _, chunk := range download.Chunks {
+                chunk.mu.Lock()
+                if chunk.Status == ChunkPaused || chunk.Status == ChunkPending {
+                    currentChunk := chunk
+                    chunk.Status = ChunkPending // Marcar como pendiente para reiniciar
+                    chunk.cancelCtx = make(chan struct{}) // Nuevo canal para poder cancelar
+                    
+                    // Informar al cliente que el chunk se está reanudando
+                    safeConn.SendJSON(map[string]interface{}{
+                        "type": "chunk_progress",
+                        "url":  url,
+                        "chunk": ChunkProgress{
+                            ID:       currentChunk.ID,
+                            Start:    currentChunk.Start,
+                            End:      currentChunk.End,
+                            Progress: currentChunk.Progress,
+                            Status:   ChunkPending,
+                        },
+                    })
+                    
+                    sem <- struct{}{} // Adquirir slot de concurrencia
+                    wg.Add(1)
+                    go func() {
+                        defer func() {
+                            <-sem // Liberar slot
+                            wg.Done()
+                        }()
+                        if err := download.DownloadChunk(downloadClient, currentChunk, safeConn); err != nil {
+                            log.Printf("Error resuming chunk %d: %v", currentChunk.ID, err)
+                        }
+                    }()
+                }
+                chunk.mu.Unlock()
+            }
+            download.mu.RUnlock()
+            
+            // Esperar a que todos los chunks se completen
+            go func() {
+                wg.Wait()
+                
+                // Verificar si la descarga se completó
+                if download.IsComplete() {
+                    handleCompletedDownload(safeConn, url, download)
+                } else {
+                    // Si no se completó, verificar si algún chunk falló
+                    downloadFailed := false
+                    download.mu.RLock()
+                    for _, chunk := range download.Chunks {
+                        chunk.mu.Lock()
+                        if chunk.Status == ChunkFailed {
+                            downloadFailed = true
+                        }
+                        chunk.mu.Unlock()
+                    }
+                    download.mu.RUnlock()
+                    
+                    if downloadFailed {
+                        sendMessage(safeConn, "error", url, "Some chunks failed to download")
+                    }
+                }
+            }()
+        }()
+    } else {
+        // Si no existe en el mapa de chunks, verificar en el mapa principal
+        activeDownloadsMux.Lock()
+        state, exists := activeDownloadsState[url] 
+        activeDownloadsMux.Unlock()
+        
+        if exists && state.active && state.paused {
+            // Si está en el mapa principal como pausada, quitar marca de pausa
+            activeDownloadsMux.Lock()
+            state.paused = false
+            activeDownloadsState[url] = state
+            activeDownloadsMux.Unlock()
+            
+            // Utilizar la descarga normal
+            sendMessage(safeConn, "log", url, "Resuming standard download...")
+            // No hacer nada, el mensaje resume_confirmed ya se envió
+        } else {
+            // No existe, iniciar como nueva descarga
+            sendMessage(safeConn, "log", url, "Starting new download...")
+            go startChunkedDownload(safeConn, url)
+        }
+    }
 }
 
 // Nueva función para manejar descargas completadas
@@ -392,7 +506,7 @@ func cancelChunkedDownload(safeConn *SafeConn, url string) {
 	download, exists := activeDownloadsMap[url]
 	activeDownloadsMutex.RUnlock()
 
-	if !exists {
+	if (!exists) {
 		sendMessage(safeConn, "log", url, "No active download found to cancel")
 		sendMessage(safeConn, "cancel_confirmed", url, "Download already cancelled")
 		return
@@ -421,7 +535,7 @@ func getDownloadProgress(url string) (downloaded int64, total int64, ok bool) {
 	download, exists := activeDownloadsMap[url]
 	activeDownloadsMutex.RUnlock()
 
-	if !exists {
+	if (!exists) {
 		return 0, 0, false
 	}
 
@@ -431,49 +545,63 @@ func getDownloadProgress(url string) (downloaded int64, total int64, ok bool) {
 
 // isDownloadActive verifica si una URL está siendo descargada
 func isDownloadActive(url string) bool {
-    // Primero verificar el map de activeDownloads original
+    // Primero verificar el mapa de estados
     activeDownloadsMux.Lock()
-    exists := activeDownloads[url]
+    state, exists := activeDownloadsState[url]
     activeDownloadsMux.Unlock()
     
-    if exists {
+    if (exists && state.active && !state.paused) {
         return true
     }
     
-    // Si no está en el mapa original, verificar en activeDownloadsMap
+    // Si no está en el mapa o está pausada, verificar en activeDownloadsMap
     activeDownloadsMutex.RLock()
-    _, existsInMap := activeDownloadsMap[url]
+    download, existsInMap := activeDownloadsMap[url]
     activeDownloadsMutex.RUnlock()
     
-    return existsInMap
+    return existsInMap && !download.Paused
 }
 
-// Asegurarse de que markDownloadActive y markDownloadInactive sean coherentes con isDownloadActive
-func markChunkDownloadActive(url string) {
-    // Marcar activo en ambos sistemas
+// markDownloadActive ahora establece el estado completo
+func markDownloadActive(url string) {
     activeDownloadsMux.Lock()
-    activeDownloads[url] = true
+    activeDownloadsState[url] = downloadState{active: true, paused: false}
     activeDownloadsMux.Unlock()
-    fmt.Printf("Chunk download tracked: %s\n", url)
+    log.Printf("Download tracked: %s", url)
 }
 
-func markChunkDownloadInactive(url string) {
-    // Eliminar de ambos sistemas
+// markDownloadPaused marca la descarga como pausada
+func markDownloadPaused(url string) {
     activeDownloadsMux.Lock()
-    delete(activeDownloads, url)
+    state := activeDownloadsState[url]
+    state.paused = true
+    activeDownloadsState[url] = state
     activeDownloadsMux.Unlock()
-    
-    activeDownloadsMutex.Lock()
-    delete(activeDownloadsMap, url)
-    activeDownloadsMutex.Unlock()
-    
-    fmt.Printf("Chunk download untracked: %s\n", url)
+    log.Printf("Download paused: %s", url)
+}
+
+// markDownloadResumed quita la marca de pausa
+func markDownloadResumed(url string) {
+    activeDownloadsMux.Lock()
+    state := activeDownloadsState[url]
+    state.paused = false
+    activeDownloadsState[url] = state
+    activeDownloadsMux.Unlock()
+    log.Printf("Download resumed: %s", url)
+}
+
+// markDownloadInactive limpia el estado
+func markDownloadInactive(url string) {
+    activeDownloadsMux.Lock()
+    delete(activeDownloadsState, url)
+    activeDownloadsMux.Unlock()
+    log.Printf("Download untracked: %s", url)
 }
 
 // Nueva función para calcular SHA-256 del archivo descargado
 func calculateSHA256(filePath string) (string, error) {
     file, err := os.Open(filePath)
-    if (err != nil) {
+    if err != nil {
         return "", fmt.Errorf("error opening file for checksum: %v", err)
     }
     defer file.Close()
@@ -488,16 +616,16 @@ func calculateSHA256(filePath string) (string, error) {
     
     for {
         n, err := file.Read(buf)
-        if n > 0 {
+        if (n > 0) {
             totalBytes += n
             hash.Write(buf[:n])
         }
         
-        if err == io.EOF {
+        if (err == io.EOF) {
             break
         }
         
-        if err != nil {
+        if (err != nil) {
             return "", fmt.Errorf("error reading file for checksum: %v", err)
         }
     }
@@ -515,7 +643,7 @@ func calculateSHA256(filePath string) (string, error) {
 func handleCalculateChecksum(safeConn *SafeConn, url string, filename string) {
     // Generar ruta del archivo
     home, err := os.UserHomeDir()
-    if err != nil {
+    if (err != nil) {
         sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to get home directory: %v", err))
         return
     }
@@ -535,7 +663,7 @@ func handleCalculateChecksum(safeConn *SafeConn, url string, filename string) {
         sendMessage(safeConn, "log", url, "Calculating SHA-256 checksum on server...")
         
         checksum, err := calculateSHA256(filePath)
-        if err != nil {
+        if (err != nil) {
             sendMessage(safeConn, "error", url, fmt.Sprintf("Checksum calculation failed: %v", err))
             return
         }

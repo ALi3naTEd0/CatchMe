@@ -193,48 +193,13 @@ func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeC
 		return err
 	}
 
-	// Descargar datos con menos frecuencia para reducir sobrecarga
-	startTime := time.Now()
-	buffer := make([]byte, 256*1024) // Aumentar a 256KB buffer
+	// Descargar datos con buffer más grande para mejor rendimiento
+	startTime := time.Now() // Guardar tiempo de inicio
+	buffer := make([]byte, 512*1024) // Aumentar a 512KB buffer para mejor rendimiento
 
-	// Monitorear progreso
-	go func() {
-		ticker := time.NewTicker(1000 * time.Millisecond) // Cambiar a 1 segundo
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				chunk.mu.Lock()
-				if chunk.Status == ChunkPaused || chunk.Status == ChunkCompleted {
-					chunk.mu.Unlock()
-					return
-				}
-				// Calcular velocidad para este chunk
-				elapsed := time.Since(startTime)
-				speed := float64(chunk.Progress) / elapsed.Seconds()
-				
-				// Reportar progreso del chunk
-				if safeConn != nil {
-					safeConn.SendJSON(map[string]interface{}{
-						"type": "chunk_progress",
-						"url":  d.URL,
-						"chunk": ChunkProgress{
-							ID:        chunk.ID,
-							Start:     chunk.Start,
-							End:       chunk.End,
-							Progress:  chunk.Progress,
-							Status:    chunk.Status,
-							Speed:     speed,
-							Completed: chunk.Start + chunk.Progress,
-						},
-					})
-				}
-				chunk.mu.Unlock()
-			case <-chunk.cancelCtx:
-				return
-			}
-		}
-	}()
+	// Monitorear progreso con frecuencia moderada - no enviar actualizaciones tan frecuentemente
+	lastUpdate := time.Now()
+	updateInterval := 500 * time.Millisecond // cada 500ms es suficiente
 
 	for {
 		select {
@@ -246,6 +211,7 @@ func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeC
 		default:
 			n, err := resp.Body.Read(buffer)
 			if n > 0 {
+				// Escribir al archivo
 				_, writeErr := file.Write(buffer[:n])
 				if writeErr != nil {
 					chunk.mu.Lock()
@@ -258,6 +224,33 @@ func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeC
 				// Actualizar progreso
 				chunk.mu.Lock()
 				chunk.Progress += int64(n)
+
+				// Enviar actualizaciones con frecuencia moderada
+				now := time.Now()
+				if now.Sub(lastUpdate) >= updateInterval {
+					lastUpdate = now
+					elapsed := time.Since(startTime)
+					if elapsed.Seconds() > 0 { // Evitar división por cero
+						speed := float64(chunk.Progress) / elapsed.Seconds()
+						
+						// Solo enviar actualización al cliente a intervalos razonables
+						if safeConn != nil {
+							safeConn.SendJSON(map[string]interface{}{
+								"type": "chunk_progress",
+								"url":  d.URL,
+								"chunk": ChunkProgress{
+									ID:        chunk.ID,
+									Start:     chunk.Start,
+									End:       chunk.End,
+									Progress:  chunk.Progress,
+									Status:    chunk.Status,
+									Speed:     speed,
+									Completed: chunk.Start + chunk.Progress,
+								},
+							})
+						}
+					}
+				}
 				chunk.mu.Unlock()
 			}
 
@@ -271,12 +264,32 @@ func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeC
 					// Reportar estadísticas de finalización del chunk
 					elapsed := time.Since(startTime)
 					totalBytes := chunk.End - chunk.Start + 1
-					speed := float64(totalBytes) / elapsed.Seconds()
+					avgSpeed := float64(totalBytes) / elapsed.Seconds()
+					
+					 // Usar la variable avgSpeed para evitar el error "declared and not used"
 					log.Printf("Chunk %d completed in %.2fs (%.2f MB/s)", 
-						chunk.ID, elapsed.Seconds(), speed/(1024*1024))
+						chunk.ID, elapsed.Seconds(), avgSpeed/(1024*1024))
 
+					// Enviar notificación final para este chunk
+					if safeConn != nil {
+						safeConn.SendJSON(map[string]interface{}{
+							"type": "chunk_progress",
+							"url":  d.URL,
+							"chunk": ChunkProgress{
+								ID:        chunk.ID,
+								Start:     chunk.Start,
+								End:       chunk.End,
+								Progress:  totalBytes,
+								Status:    ChunkCompleted,
+								Speed:     0,  // No velocidad cuando está completo
+								Completed: chunk.End + 1,
+							},
+						})
+					}
+					
 					return nil
 				}
+				
 				// Error de descarga
 				chunk.mu.Lock()
 				chunk.Status = ChunkFailed

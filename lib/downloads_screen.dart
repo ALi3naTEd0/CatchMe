@@ -146,7 +146,15 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         : StreamBuilder<DownloadItem>(
           stream: _downloadService.downloadStream,
           builder: (context, snapshot) {
-            // Mostrar lista aunque no haya datos en el stream
+            // Importante: No usar Key única con DateTime pues fuerza reconstrucción
+            // causando lag y problemas de rendimiento
+            
+            // Imprimir información para depuración
+            if (snapshot.hasData) {
+              final download = snapshot.data!;
+              print('UI received update: ${download.filename} - ${download.formattedProgress}');
+            }
+            
             return ListView.builder(
               itemCount: _downloadService.downloads.length,
               padding: const EdgeInsets.all(16),
@@ -164,7 +172,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     final accent = Colors.blue[300] ?? Colors.blue;
     final screenWidth = MediaQuery.of(context).size.width;
     final isMobile = screenWidth < 800;
-
+    
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: Column(
@@ -211,7 +219,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               ],
             ),
           ),
-
+          
           // Barra de progreso con stats
           Container(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -236,7 +244,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
-
+                
                 // Barra de progreso
                 LinearProgressIndicator(
                   value: download.progress,
@@ -245,7 +253,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                   minHeight: 6,
                 ),
                 const SizedBox(height: 12),
-
+                
                 // Stats según layout
                 if (isMobile)
                   Column(
@@ -365,7 +373,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                       ),
                     ],
                   ),
-
+                              
                 // Mini log más visible y durante la descarga
                 if (download.status == DownloadStatus.downloading || download.logs.isNotEmpty)
                   Container(
@@ -380,7 +388,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                       maxHeight: 150,  // Más alto para mostrar más logs
                       minHeight: 80,  // Altura mínima para que siempre se vea bien
                     ),
-                    child: download.logs.isEmpty 
+                    child: download.logs.isEmpty
                       ? Center(
                           child: Text(
                             'No logs available',
@@ -407,37 +415,66 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                         ),
                   ),
                 
-                // Visualización mejorada de chunks - SIEMPRE mostrar si hay chunks, no solo durante la descarga
-                if (download.chunks.isNotEmpty)
+                // Visualización mejorada de chunks - SIEMPRE mostrar si hay chunks
+                if (download.chunks.isNotEmpty) 
                   Container(
                     margin: const EdgeInsets.only(top: 16),
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: Colors.grey[900],
                       borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: accent.withOpacity(0.2)),
+                      border: Border.all(color: accent.withOpacity(0.3)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8),
-                          child: Text(
-                            'Download Chunks (${download.chunks.length})',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Download Chunks (${download.chunks.length})',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                              ),
+                              // Mostrar estado global de chunks
+                              Text(
+                                '${download.chunks.values.where((c) => c.status == 'completed').length}/${download.chunks.length} complete',
+                                style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                              ),
+                            ],
                           ),
                         ),
-                        // Mostrar chunks con más actividad - Ordenar por estado, mostrando activos primero
+                        
+                        // Ordenar chunks por estado - mostrar activos primero
                         ...download.chunks.values.toList()
-                          .where((c) => c.status != 'completed') // Mostrar primero chunks no completados
-                          .take(3) // Mostrar máximo 3 chunks activos
+                          .where((c) => c.status == 'active')
+                          .take(3) // Limitar para no sobrecargar UI
                           .map((chunk) => _buildChunkProgressItem(chunk, accent))
                           .followedBy(download.chunks.values.toList()
-                            .where((c) => c.status == 'completed') // Luego mostrar completados
-                            .take(2) // Mostrar máximo 2 chunks completados
+                            .where((c) => c.status == 'pending')
+                            .take(1)
                             .map((chunk) => _buildChunkProgressItem(chunk, accent)))
-                          .take(5) // Limitar a total 5 chunks
+                          .followedBy(download.chunks.values.toList()
+                            .where((c) => c.status == 'paused')
+                            .take(1)
+                            .map((chunk) => _buildChunkProgressItem(chunk, accent)))
+                          .followedBy(download.chunks.values.toList()
+                            .where((c) => c.status == 'completed')
+                            .take(2) // Solo mostrar hasta 2 chunks completados
+                            .map((chunk) => _buildChunkProgressItem(chunk, accent)))
                           .toList(),
+                        
+                        // Mostrar resumen si hay más chunks
+                        if (download.chunks.length > 7)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(
+                              '+ ${download.chunks.length - 7} more chunks',
+                              style: TextStyle(fontSize: 11, color: Colors.grey[400]),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -521,7 +558,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     
     while (value > 1024 && unitIndex < units.length - 1) {
       value /= 1024;
-      unitIndex++;
+      unitIndex++; 
     }
     
     return '${value.toStringAsFixed(1)} ${units[unitIndex]}';
@@ -584,9 +621,17 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   void _toggleDownload(DownloadItem download) {
     if (download.status == DownloadStatus.downloading) {
       print('UI: Pausing download: ${download.url}');
+      // Mostrar estado intermedio con widget visual
+      setState(() {
+        download.tempStatus = "pausing";  // Estado temporal para UI
+      });
       _downloadService.pauseDownload(download.url);
     } else if (download.status == DownloadStatus.paused) {
       print('UI: Resuming download: ${download.url}');
+      // Mostrar estado intermedio con widget visual
+      setState(() {
+        download.tempStatus = "resuming";  // Estado temporal para UI 
+      });
       _downloadService.resumeDownload(download.url);
     }
   }

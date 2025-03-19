@@ -38,28 +38,6 @@ func (sc *SafeConn) SendText(message string) error {
     return sc.conn.WriteMessage(websocket.TextMessage, []byte(message))
 }
 
-// Agregamos un mapa para rastrear las descargas activas en el servidor
-var (
-    activeDownloads     = make(map[string]bool)
-    activeDownloadsMux  sync.Mutex
-)
-
-// Función para marcar una descarga como activa
-func markDownloadActive(url string) {
-    activeDownloadsMux.Lock()
-    defer activeDownloadsMux.Unlock()
-    activeDownloads[url] = true
-    log.Printf("Download tracked: %s", url)
-}
-
-// Función para marcar una descarga como cancelada/terminada
-func markDownloadInactive(url string) {
-    activeDownloadsMux.Lock()
-    defer activeDownloadsMux.Unlock()
-    delete(activeDownloads, url)
-    log.Printf("Download untracked: %s", url)
-}
-
 func handleDownload(safeConn *SafeConn, url string) {
     // Marcamos la URL como activa
     markDownloadActive(url)
@@ -177,8 +155,21 @@ func handleDownload(safeConn *SafeConn, url string) {
     }()
 
     for {
-        // Verificar si la descarga ha sido cancelada
+        // Verificar si la descarga ha sido cancelada o pausada
         if !isDownloadActive(url) {
+            // Verificar si está pausada
+            activeDownloadsMux.Lock()
+            state, exists := activeDownloadsState[url]
+            activeDownloadsMux.Unlock()
+            
+            if exists && state.paused {
+                log.Printf("Download paused during transfer: %s", url)
+                // No salir del bucle pero esperar
+                time.Sleep(500 * time.Millisecond)
+                continue
+            }
+            
+            // Si no está pausada, entonces fue cancelada
             log.Printf("Download cancelled during transfer: %s", url)
             return
         }
@@ -331,17 +322,18 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
                 }
                 
                 // Verificar si ya existe una descarga activa con esta URL
-                // Usar activeDownloads en lugar de la función para ser consistente
-                activeDownloadsMux.Lock()
-                alreadyActive := activeDownloads[url]
-                activeDownloadsMux.Unlock()
-                
-                if alreadyActive {
+                // Usar activeDownloadsState o activeDownloadsMap en lugar de activeDownloads
+                if isDownloadActive(url) {
                     log.Printf("URL already being downloaded: %s", url)
                     sendMessage(safeConn, "error", url, "This URL is already being downloaded")
                 } else {
-                    // Por ahora, usar sólo el método normal sin la variable useChunks
-                    go handleDownload(safeConn, url)
+                    // Verificar si deberíamos usar chunks
+                    useChunks, _ := msg["use_chunks"].(bool)
+                    if useChunks {
+                        go handleChunkedDownload(safeConn, url)
+                    } else {
+                        go handleDownload(safeConn, url)
+                    }
                 }
             } else {
                 log.Printf("Invalid download request, missing URL")
@@ -370,9 +362,6 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
                 // Pausar descarga
                 if isDownloadActive(url) {
                     handlePauseChunkedDownload(safeConn, url)
-                    
-                    // Confirmar pausa al cliente - esto es importante
-                    sendMessage(safeConn, "pause_confirmed", url, "Download paused successfully")
                 } else {
                     sendMessage(safeConn, "error", url, "No active download found to pause")
                 }
@@ -383,9 +372,6 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
                 
                 // Reanudar descarga
                 handleResumeChunkedDownload(safeConn, url)
-                
-                // Confirmar reanudación al cliente - esto es importante
-                sendMessage(safeConn, "resume_confirmed", url, "Download resumed successfully")
             }
         case "calculate_checksum":
             if url, ok := msg["url"].(string); ok {
