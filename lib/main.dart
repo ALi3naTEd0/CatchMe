@@ -67,6 +67,7 @@ class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
   bool _serverStarted = false;
   String _statusMessage = 'Initializing...';
+  bool _useServiceMode = false; // Nuevo campo
   
   static const List<Widget> _screens = [
     DownloadsScreen(),
@@ -87,8 +88,8 @@ class _MainScreenState extends State<MainScreen> {
     });
 
     try {
-      // Iniciar el servidor backend
-      await ServerLauncher().startServer();
+      // Iniciar el servidor backend en modo seleccionado
+      await ServerLauncher().startServer(asService: _useServiceMode);
       
       setState(() {
         _statusMessage = 'Connecting to server...';
@@ -303,6 +304,25 @@ class _MainScreenState extends State<MainScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildServiceModeToggle() {
+    return SwitchListTile(
+      title: Text('Run as background service'),
+      subtitle: Text('Keep downloads running even when app is closed'),
+      value: _useServiceMode,
+      onChanged: (value) {
+        setState(() {
+          _useServiceMode = value;
+        });
+        // Si el servidor ya está corriendo, reiniciarlo con la nueva configuración
+        if (ServerLauncher().isRunning) {
+          ServerLauncher().stopServer().then((_) {
+            _startServerAndInitServices();
+          });
+        }
+      },
     );
   }
 }

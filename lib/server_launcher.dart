@@ -17,6 +17,8 @@ class ServerLauncher {
 
   final _logFile = File('logs/server.log');
   
+  bool _serviceMode = false;
+
   Future<void> _log(String message) async {
     final timestamp = DateTime.now().toIso8601String();
     final logMessage = '[$timestamp] $message\n';
@@ -26,7 +28,7 @@ class ServerLauncher {
     print(logMessage);
   }
 
-  Future<void> startServer() async {
+  Future<void> startServer({bool asService = false}) async {
     if (isRunning) {
       _statusController.add(true);
       return;
@@ -34,6 +36,7 @@ class ServerLauncher {
 
     try {
       await _log('=== Iniciando servidor Go ===');
+      _serviceMode = asService;
       
       // Verificar puerto en uso
       try {
@@ -53,111 +56,33 @@ class ServerLauncher {
         throw Exception('Server directory not found: ${serverDir.absolute.path}');
       }
 
-      // Limpiar caché de go mod antes de iniciar
-      await _log('Limpiando caché de módulos Go...');
-      try {
-        final cleanResult = await Process.run(
-          'go', ['clean', '-modcache'], 
-          workingDirectory: serverDir.absolute.path
-        );
-        
-        if (cleanResult.exitCode != 0) {
-          await _log('Warning: Error al limpiar caché de Go: ${cleanResult.stderr}');
-        } else {
-          await _log('Caché de Go limpiada exitosamente');
-        }
-        
-        // Verificar go.mod
-        final goModTidyResult = await Process.run(
-          'go', ['mod', 'tidy'], 
-          workingDirectory: serverDir.absolute.path
-        );
-        
-        if (goModTidyResult.exitCode != 0) {
-          await _log('Warning: Error en go mod tidy: ${goModTidyResult.stderr}');
-        } else {
-          await _log('go mod tidy completado exitosamente');
-        }
-        
-      } catch (e) {
-        await _log('Warning: Error en preparación Go: $e');
+      // Limpiar caché antes de iniciar
+      await _log('Preparando servidor...');
+      
+      // Si es modo servicio, añadir el argumento correspondiente
+      final List<String> args = ['run', '.'];
+      if (_serviceMode) {
+        args.add('--service');
+        await _log('Iniciando en modo servicio...');
       }
 
-      // Siempre usar go run para asegurar que se ejecuta el servidor con las actualizaciones
       _serverProcess = await Process.start(
         'go',
-        ['run', '.'],
+        args,
         workingDirectory: serverDir.absolute.path,
       );
-      await _log('=== Servidor Go iniciado con go run ===');
-      await _log('=== Servidor Go iniciado con PID: ${_serverProcess?.pid} ===');
+      
+      if (_serviceMode) {
+        await _log('=== Servidor Go iniciado como servicio ===');
+      } else {
+        await _log('=== Servidor Go iniciado en modo normal ===');
+      }
+      await _log('=== PID: ${_serverProcess?.pid} ===');
 
-      // Contador para verificar si el servidor inicia correctamente
-      bool serverStarted = false;
+      // Monitorear salida y error
+      _monitorServerOutput();
 
-      // Monitorear salida del servidor y actualizar status
-      _serverProcess!.stdout.transform(utf8.decoder).listen((data) async {
-        await _log('Server stdout: $data');
-        if (data.contains('Starting server on :8080')) {
-          serverStarted = true;
-          _statusController.add(true);  // Servidor iniciado
-        }
-      });
-
-      _serverProcess!.stderr.transform(utf8.decoder).listen((data) async {
-        await _log('Server stderr: $data');
-      });
-
-      // Monitorear si el proceso termina
-      _serverProcess!.exitCode.then((code) async {
-        await _log('Server exited with code $code');
-        _statusController.add(false);  // Servidor detenido
-        _serverProcess = null;
-        
-        if (!serverStarted && code != 0) {
-          // Reintentar con un enfoque alternativo si el servidor falló
-          await _log('Intentando método alternativo de inicio...');
-          try {
-            // Usar 'go build' primero
-            await _log('Compilando servidor Go...');
-            final buildResult = await Process.run(
-              'go', ['build', '-o', 'catchme-server', '.'], 
-              workingDirectory: serverDir.absolute.path
-            );
-            
-            if (buildResult.exitCode == 0) {
-              await _log('Servidor compilado, intentando ejecutar binario...');
-              
-              // Ejecutar el binario compilado
-              _serverProcess = await Process.start(
-                './catchme-server',
-                [],
-                workingDirectory: serverDir.absolute.path,
-              );
-              
-              await _log('=== Servidor binario iniciado con PID: ${_serverProcess?.pid} ===');
-              
-              // Configurar listeners para el nuevo proceso
-              _serverProcess!.stdout.transform(utf8.decoder).listen((data) async {
-                await _log('Binary stdout: $data');
-                if (data.contains('Starting server on :8080')) {
-                  _statusController.add(true);
-                }
-              });
-              
-              _serverProcess!.stderr.transform(utf8.decoder).listen((data) async {
-                await _log('Binary stderr: $data');
-              });
-            } else {
-              await _log('Error compilando servidor: ${buildResult.stderr}');
-            }
-          } catch (e) {
-            await _log('Error en proceso de recuperación: $e');
-          }
-        }
-      });
-
-      // Esperar un poco para verificar que el servidor inició correctamente
+      // Esperar para verificar que inició correctamente
       await Future.delayed(Duration(seconds: 2));
       
     } catch (e, stack) {
@@ -167,15 +92,52 @@ class ServerLauncher {
     }
   }
 
+  void _monitorServerOutput() {
+    _serverProcess!.stdout.transform(utf8.decoder).listen((data) async {
+      await _log('Server stdout: $data');
+      if (data.contains('Starting server on :8080') ||
+          data.contains('CatchMe service started')) {
+        _statusController.add(true);  // Servidor iniciado
+      }
+    });
+
+    _serverProcess!.stderr.transform(utf8.decoder).listen((data) async {
+      await _log('Server stderr: $data');
+    });
+
+    // Monitorear si el proceso termina
+    _serverProcess!.exitCode.then((code) async {
+      await _log('Server exited with code $code');
+      _statusController.add(false);  // Servidor detenido
+      _serverProcess = null;
+      
+      // No reintentar si estamos en modo servicio y fue terminación normal
+      if (!_serviceMode || code != 0) {
+        _attemptRecovery();
+      }
+    });
+  }
+
+  Future<void> _attemptRecovery() async {
+    // ... implementar lógica de recuperación aquí ...
+  }
+
   Future<void> stopServer() async {
     if (!isRunning) return;
     
     try {
       await _log('=== Deteniendo servidor Go ===');
       
-      _serverProcess?.kill(ProcessSignal.sigterm);
-      await Future.delayed(const Duration(seconds: 1));
-      _serverProcess?.kill(ProcessSignal.sigkill);
+      if (_serviceMode) {
+        // En modo servicio, enviar señal SIGTERM para un apagado limpio
+        _serverProcess?.kill(ProcessSignal.sigterm);
+        await Future.delayed(const Duration(seconds: 3)); // Dar más tiempo para limpieza en modo servicio
+      }
+      
+      // Si todavía está ejecutando, forzar terminación
+      if (_serverProcess != null) {
+        _serverProcess?.kill(ProcessSignal.sigkill);
+      }
       
       await _log('=== Servidor detenido ===');
     } catch (e) {

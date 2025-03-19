@@ -8,6 +8,7 @@ import (
     "net/http"
     "os"
     "path/filepath"
+    "strconv"  // Agregar esta línea
     "strings"
     "sync"
     "time"
@@ -365,6 +366,8 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
                 } else {
                     sendMessage(safeConn, "error", url, "No active download found to pause")
                 }
+            } else {
+                log.Printf("Invalid pause request: missing URL")
             }
         case "resume_download":
             if url, ok := msg["url"].(string); ok {
@@ -372,6 +375,8 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
                 
                 // Reanudar descarga
                 handleResumeChunkedDownload(safeConn, url)
+            } else {
+                log.Printf("Invalid resume request: missing URL")
             }
         case "calculate_checksum":
             if url, ok := msg["url"].(string); ok {
@@ -388,7 +393,43 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
     }
 }
 
+func parseCommandLineArgs() (bool, int) {
+    runAsService := false
+    port := 8080
+    
+    // Verificar si hay argumentos para ejecutar como servicio
+    args := os.Args[1:]
+    for i := 0; i < len(args); i++ {
+        switch args[i] {
+        case "--service", "-s":
+            runAsService = true
+        case "--port", "-p":
+            if i+1 < len(args) {
+                if p, err := strconv.Atoi(args[i+1]); err == nil {
+                    port = p
+                    i++ // Saltar el siguiente argumento
+                }
+            }
+        }
+    }
+    
+    return runAsService, port
+}
+
+// Modificar la función main para soportar modo servicio:
 func main() {
+    // Analizar argumentos de línea de comando
+    runAsService, port := parseCommandLineArgs()
+    
+    // Si se solicita ejecutar como servicio
+    if runAsService {
+        log.Println("Starting CatchMe as a service...")
+        if err := RunAsService(port); err != nil {
+            log.Fatalf("Service error: %v", err)
+        }
+        return
+    }
+    
     // Asegurarse de que existe el directorio de logs
     err := os.MkdirAll("logs", os.ModePerm)
     if (err != nil) {

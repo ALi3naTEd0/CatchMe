@@ -32,6 +32,14 @@ class DownloadItem {
   double _speedAccumulator = 0;
   int _speedSampleCount = 0;
 
+  // Estado UI para expandir/contraer log y chunks
+  bool? expandLog;
+  bool? expandChunks;
+  
+  // Campos para control de reintentos
+  int? pauseRetries;
+  int? resumeRetries;
+
   DownloadItem({
     required this.url,
     required this.filename,
@@ -43,6 +51,8 @@ class DownloadItem {
     this.status = DownloadStatus.queued,
     this.tempStatus,
     this.error,
+    this.expandLog = false,
+    this.expandChunks = false,
   }) : startTime = DateTime.now();
 
   String get formattedProgress => '${(progress * 100).toStringAsFixed(1)}%';
@@ -83,22 +93,67 @@ class DownloadItem {
   String get elapsed {
     final duration = DateTime.now().difference(startTime);
     final hours = duration.inHours.toString().padLeft(2, '0');
-    final minutes = duration.inMinutes.toString().padLeft(2, '0');
+    final minutes = (duration.inMinutes % 60).toString().padLeft(2, '0');
     final secs = (duration.inSeconds % 60).toString().padLeft(2, '0');
     return '$hours:$minutes:$secs';
   }
 
   void addLog(String message) {
     final timestamp = DateTime.now();
-    // Formatear hora con padding para asegurar siempre 2 dígitos
     final hours = timestamp.hour.toString().padLeft(2, '0');
     final minutes = timestamp.minute.toString().padLeft(2, '0');
     final seconds = timestamp.second.toString().padLeft(2, '0');
     final time = '$hours:$minutes:$seconds';
     
-    // Limitar el tamaño de los logs para evitar problemas de memoria
+    // Evitar duplicados consecutivos
+    if (logs.isNotEmpty) {
+      final lastLog = logs.last;
+      final lastMsgStart = lastLog.indexOf(']') + 2;
+      if (lastMsgStart > 0 && lastMsgStart < lastLog.length) {
+        final lastMsg = lastLog.substring(lastMsgStart);
+        
+        // Si el mensaje es idéntico al último, no lo añadir
+        if (lastMsg == message) {
+          return;
+        }
+        
+        // Manejar incrementos de progreso
+        if (message.startsWith('📥 ') && lastMsg.startsWith('📥 ')) {
+          final percentRegex = RegExp(r'(\d+\.\d+)%');
+          final lastMatch = percentRegex.firstMatch(lastMsg);
+          final currentMatch = percentRegex.firstMatch(message);
+          
+          if (lastMatch != null && currentMatch != null) {
+            final lastPercent = double.tryParse(lastMatch.group(1) ?? '0');
+            final currentPercent = double.tryParse(currentMatch.group(1) ?? '0');
+            
+            if (lastPercent != null && currentPercent != null) {
+              // Solo permitir incrementos de 0.1%
+              final difference = currentPercent - lastPercent;
+              if (difference < 0.1) {
+                return; // Ignorar cambios menores a 0.1%
+              }
+              
+              // Asegurar incrementos consecutivos
+              final expectedPercent = (lastPercent * 10).round() / 10 + 0.1;
+              if (currentPercent > expectedPercent) {
+                // Generar incrementos intermedios
+                var nextPercent = expectedPercent;
+                while (nextPercent < currentPercent) {
+                  logs.add('[$time] 📥 ${nextPercent.toStringAsFixed(1)}%');
+                  nextPercent += 0.1;
+                }
+                return; // El porcentaje actual se añadirá en la siguiente actualización
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    // Limitar el tamaño de los logs
     if (logs.length > 500) {
-      logs.removeRange(0, 100); // Eliminar los 100 logs más antiguos
+      logs.removeRange(0, 100);
     }
     
     logs.add('[$time] $message');
@@ -149,5 +204,48 @@ class DownloadItem {
   void updateChunk(ChunkInfo chunkInfo) {
     // Simplemente guardar el chunk en el mapa
     chunks[chunkInfo.id] = chunkInfo;
+  }
+
+  // Agregar un helper para detectar estados transitorios
+  bool get isInTransition => tempStatus != null;
+
+  String get statusDisplay {
+    if (tempStatus == 'pausing') return 'Pausing...';
+    if (tempStatus == 'resuming') return 'Resuming...';
+    
+    switch (status) {
+      case DownloadStatus.queued:
+        return 'Queued';
+      case DownloadStatus.downloading:
+        return 'Downloading';
+      case DownloadStatus.completed:
+        return 'Completed';
+      case DownloadStatus.paused:
+        return 'Paused';
+      case DownloadStatus.error:
+        return 'Error';
+      default:
+        return 'Unknown';
+    }
+  }
+
+  String get statusText {
+    if (tempStatus == 'pausing') return 'Pausing...';
+    if (tempStatus == 'resuming') return 'Resuming...';
+    
+    switch (status) {
+      case DownloadStatus.queued:
+        return 'Queued';
+      case DownloadStatus.downloading:
+        return 'Downloading';
+      case DownloadStatus.completed:
+        return 'Completed';
+      case DownloadStatus.paused:
+        return 'Paused';
+      case DownloadStatus.error:
+        return 'Error';
+      default:
+        return 'Unknown';
+    }
   }
 }

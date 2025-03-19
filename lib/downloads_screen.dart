@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Agregar esta línea para Clipboard
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'download_item.dart';
@@ -173,6 +174,31 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     final screenWidth = MediaQuery.of(context).size.width;
     final isMobile = screenWidth < 800;
     
+    // Estado para controlar la expansión del log y chunks
+    bool expandLog = download.expandLog ?? false;
+    bool expandChunks = download.expandChunks ?? false;
+    
+    // Determinar qué icono mostrar basado en el estado y el estado temporal
+    IconData actionIcon;
+    bool enableButton = true;
+    
+    // Lógica para el icono de acción basado en el estado + estado temporal
+    if (download.tempStatus == 'pausing') {
+      actionIcon = Icons.hourglass_top;
+      enableButton = false;  // Deshabilitar botón mientras se procesa
+    } else if (download.tempStatus == 'resuming') {
+      actionIcon = Icons.hourglass_bottom;
+      enableButton = false;  // Deshabilitar botón mientras se procesa
+    } else if (download.status == DownloadStatus.downloading) {
+      actionIcon = Icons.pause;
+    } else if (download.status == DownloadStatus.paused) {
+      actionIcon = Icons.play_arrow;
+    } else if (download.status == DownloadStatus.completed) {
+      actionIcon = Icons.folder_open;
+    } else {
+      actionIcon = Icons.pause;  // Valor por defecto
+    }
+
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: Column(
@@ -191,9 +217,26 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                         download.filename,
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
-                      Text(
-                        download.url,
-                        style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              download.url,
+                              style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          // Mostrar el estado aquí, especialmente para pausing/resuming
+                          if (download.tempStatus != null)
+                            Text(
+                              download.statusDisplay,
+                              style: TextStyle(
+                                fontSize: 12, 
+                                color: download.tempStatus == 'pausing' ? Colors.orange : Colors.green,
+                                fontWeight: FontWeight.bold
+                              ),
+                            ),
+                        ],
                       ),
                     ],
                   ),
@@ -205,12 +248,8 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                   )
                 else
                   IconButton(
-                    icon: Icon(
-                      download.status == DownloadStatus.downloading 
-                        ? Icons.pause : Icons.play_arrow,
-                      color: accent,
-                    ),
-                    onPressed: () => _toggleDownload(download),
+                    icon: Icon(actionIcon, color: accent),
+                    onPressed: enableButton ? () => _toggleDownload(download) : null,
                   ),
                 IconButton(
                   icon: Icon(Icons.close, color: Colors.red[300]),
@@ -374,52 +413,88 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                     ],
                   ),
                               
-                // Mini log más visible y durante la descarga
-                if (download.status == DownloadStatus.downloading || download.logs.isNotEmpty)
-                  Container(
+                // Mini log con toggle para expandir/contraer
+                if (download.logs.isNotEmpty)
+                  AnimatedContainer(
+                    duration: Duration(milliseconds: 200),
                     margin: const EdgeInsets.only(top: 16),
-                    padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: Colors.grey[900],
                       borderRadius: BorderRadius.circular(4),
                       border: Border.all(color: accent.withOpacity(0.2)),
                     ),
-                    constraints: const BoxConstraints(
-                      maxHeight: 150,  // Más alto para mostrar más logs
-                      minHeight: 80,  // Altura mínima para que siempre se vea bien
-                    ),
-                    child: download.logs.isEmpty
-                      ? Center(
-                          child: Text(
-                            'No logs available',
-                            style: TextStyle(color: Colors.grey[600], fontStyle: FontStyle.italic),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        InkWell(
+                          onTap: () {
+                            setState(() {
+                              download.expandLog = !expandLog;
+                            });
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.all(8.0),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'Download Log',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                Row(
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.copy, size: 16),
+                                      onPressed: () => _copyLogs(download),
+                                      tooltip: 'Copy logs',
+                                    ),
+                                    Icon(
+                                      expandLog ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                                      color: accent,
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
-                        )
-                      : ListView.builder(
-                          reverse: true,
-                          itemCount: download.logs.length,
-                          padding: EdgeInsets.zero,
-                          itemExtent: 18.0, // Altura fija por elemento para scroll uniforme
-                          itemBuilder: (_, i) => Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 1),
-                            child: Text(
-                              download.logs[download.logs.length - i - 1],
-                              style: const TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 11,
-                                color: Colors.white70,
-                                height: 1.2,
+                        ),
+                        
+                        // Logs que aparecen solo cuando está expandido
+                        AnimatedContainer(
+                          duration: Duration(milliseconds: 200),
+                          height: expandLog ? 150 : 0,
+                          curve: Curves.easeInOut,
+                          child: Container(
+                            constraints: BoxConstraints(
+                              minHeight: expandLog ? 150 : 0,
+                              maxHeight: expandLog ? 150 : 0,
+                            ),
+                            child: ListView.builder(
+                              reverse: true,
+                              itemCount: download.logs.length,
+                              padding: EdgeInsets.all(8),
+                              itemExtent: 18.0,
+                              itemBuilder: (_, i) => SelectableText(
+                                download.logs[download.logs.length - i - 1],
+                                style: const TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontSize: 11,
+                                  color: Colors.white70,
+                                  height: 1.2,
+                                ),
                               ),
                             ),
                           ),
                         ),
+                      ],
+                    ),
                   ),
-                
-                // Visualización mejorada de chunks - SIEMPRE mostrar si hay chunks
-                if (download.chunks.isNotEmpty) 
-                  Container(
+
+                // Chunks siempre visibles pero colapsables
+                if (download.chunks.isNotEmpty)
+                  AnimatedContainer(
+                    duration: Duration(milliseconds: 200),
                     margin: const EdgeInsets.only(top: 16),
-                    padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
                       color: Colors.grey[900],
                       borderRadius: BorderRadius.circular(4),
@@ -428,53 +503,63 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                'Download Chunks (${download.chunks.length})',
-                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                              ),
-                              // Mostrar estado global de chunks
-                              Text(
-                                '${download.chunks.values.where((c) => c.status == 'completed').length}/${download.chunks.length} complete',
-                                style: TextStyle(fontSize: 12, color: Colors.grey[400]),
-                              ),
-                            ],
+                        InkWell(
+                          onTap: () {
+                            setState(() {
+                              download.expandChunks = !expandChunks;
+                            });
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.all(8.0),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'Download Chunks (${download.chunks.length})',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                Row(
+                                  children: [
+                                    Text(
+                                      '${download.chunks.values.where((c) => c.status == 'completed').length}/${download.chunks.length}',
+                                      style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.copy, size: 16),
+                                      onPressed: () => _copyChunksInfo(download),
+                                      tooltip: 'Copy chunks info',
+                                    ),
+                                    Icon(
+                                      expandChunks ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                                      color: accent,
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                         
-                        // Ordenar chunks por estado - mostrar activos primero
-                        ...download.chunks.values.toList()
-                          .where((c) => c.status == 'active')
-                          .take(3) // Limitar para no sobrecargar UI
-                          .map((chunk) => _buildChunkProgressItem(chunk, accent))
-                          .followedBy(download.chunks.values.toList()
-                            .where((c) => c.status == 'pending')
-                            .take(1)
-                            .map((chunk) => _buildChunkProgressItem(chunk, accent)))
-                          .followedBy(download.chunks.values.toList()
-                            .where((c) => c.status == 'paused')
-                            .take(1)
-                            .map((chunk) => _buildChunkProgressItem(chunk, accent)))
-                          .followedBy(download.chunks.values.toList()
-                            .where((c) => c.status == 'completed')
-                            .take(2) // Solo mostrar hasta 2 chunks completados
-                            .map((chunk) => _buildChunkProgressItem(chunk, accent)))
-                          .toList(),
-                        
-                        // Mostrar resumen si hay más chunks
-                        if (download.chunks.length > 7)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 8),
-                            child: Text(
-                              '+ ${download.chunks.length - 7} more chunks',
-                              style: TextStyle(fontSize: 11, color: Colors.grey[400]),
-                              textAlign: TextAlign.center,
+                        // Chunks que aparecen solo cuando está expandido
+                        AnimatedContainer(
+                          duration: Duration(milliseconds: 200),
+                          height: expandChunks ? null : 48,
+                          curve: Curves.easeInOut,
+                          child: SingleChildScrollView(
+                            padding: EdgeInsets.all(8),
+                            physics: expandChunks ? AlwaysScrollableScrollPhysics() : NeverScrollableScrollPhysics(),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (expandChunks)
+                                  ..._buildExpandedChunksContent(download, accent)
+                                else
+                                  _buildCollapsedChunksContent(download, accent),
+                              ],
                             ),
                           ),
+                        ),
                       ],
                     ),
                   ),
@@ -619,20 +704,117 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   }
 
   void _toggleDownload(DownloadItem download) {
+    // Verificar si la descarga ya está en proceso de pausa/resumen
+    if (download.isInTransition) {
+      print('Download already in transition state: ${download.tempStatus}');
+      return;
+    }
+    
+    if (download.status == DownloadStatus.completed) {
+      _openFileLocation(download);
+      return;
+    }
+
     if (download.status == DownloadStatus.downloading) {
       print('UI: Pausing download: ${download.url}');
-      // Mostrar estado intermedio con widget visual
-      setState(() {
-        download.tempStatus = "pausing";  // Estado temporal para UI
-      });
       _downloadService.pauseDownload(download.url);
     } else if (download.status == DownloadStatus.paused) {
       print('UI: Resuming download: ${download.url}');
-      // Mostrar estado intermedio con widget visual
-      setState(() {
-        download.tempStatus = "resuming";  // Estado temporal para UI 
-      });
       _downloadService.resumeDownload(download.url);
+    } else {
+      print('Download in non-toggleable state: ${download.status}');
     }
+  }
+
+  // Agregar métodos para copiar información
+  void _copyLogs(DownloadItem download) {
+    final logs = download.logs.join('\n');
+    Clipboard.setData(ClipboardData(text: logs));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Logs copied to clipboard')),
+    );
+  }
+
+  void _copyChunksInfo(DownloadItem download) {
+    final buffer = StringBuffer();
+    buffer.writeln('Chunks status for ${download.filename}:');
+    buffer.writeln('Total chunks: ${download.chunks.length}');
+    buffer.writeln('Completed: ${download.chunks.values.where((c) => c.status == 'completed').length}');
+    buffer.writeln('\nDetailed chunks info:');
+    
+    final sortedChunks = download.chunks.values.toList()
+      ..sort((a, b) => a.id.compareTo(b.id));
+    
+    for (var chunk in sortedChunks) {
+      buffer.writeln('Chunk #${chunk.id + 1}:');
+      buffer.writeln('  Status: ${chunk.status}');
+      buffer.writeln('  Progress: ${(chunk.progressPercentage * 100).toStringAsFixed(1)}%');
+      buffer.writeln('  Size: ${_formatBytes((chunk.end - chunk.start + 1).toDouble())}');
+    }
+
+    Clipboard.setData(ClipboardData(text: buffer.toString()));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Chunks info copied to clipboard')),
+    );
+  }
+
+  // Nuevos métodos auxiliares para la UI de chunks
+  List<Widget> _buildExpandedChunksContent(DownloadItem download, Color accent) {
+    final sections = [
+      ('active', 'Active Chunks', accent),
+      ('paused', 'Paused Chunks', Colors.orange),
+      ('pending', 'Pending Chunks', Colors.grey),
+      ('completed', 'Completed Chunks', Colors.green),
+      ('failed', 'Failed Chunks', Colors.red),
+    ];
+    
+    List<Widget> widgets = [];
+    
+    for (final (status, title, color) in sections) {
+      final chunks = download.chunks.values.where((c) => c.status == status).toList();
+      if (chunks.isNotEmpty) {
+        widgets.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 4),
+            child: Text(title, style: TextStyle(fontSize: 12, color: color)),
+          )
+        );
+        widgets.addAll(chunks.map((c) => _buildChunkProgressItem(c, accent)));
+      }
+    }
+    
+    return widgets;
+  }
+
+  Widget _buildCollapsedChunksContent(DownloadItem download, Color accent) {
+    return Row(
+      children: [
+        Expanded(
+          child: LinearProgressIndicator(
+            value: download.progress,
+            backgroundColor: Colors.grey[800],
+            valueColor: AlwaysStoppedAnimation<Color>(accent),
+            minHeight: 8,
+          ),
+        ),
+        SizedBox(width: 8),
+        Text(
+          '${download.chunks.values.where((c) => c.status == 'active').length} active',
+          style: TextStyle(fontSize: 10),
+        ),
+      ],
+    );
+  }
+
+  // Agregar método _formatBytes que faltaba
+  String _formatBytes(double bytes) {
+    if (bytes <= 0) return '0 B';
+    const suffixes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var i = 0;
+    while (bytes >= 1024 && i < suffixes.length - 1) {
+      bytes /= 1024;
+      i++;
+    }
+    return '${bytes.toStringAsFixed(1)} ${suffixes[i]}';
   }
 }

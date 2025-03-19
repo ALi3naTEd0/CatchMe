@@ -287,17 +287,25 @@ class DownloadService {
       return;
     }
     
-    // Actualizar UI primero
-    item.addLog('⏸ Pausing download');
-    item.status = DownloadStatus.paused;
+    // Ver si ya está en pausa o está pausando
+    if (item.status == DownloadStatus.paused) {
+      print('Download already paused: $url');
+      return;
+    }
+    
+    if (item.tempStatus == 'pausing') {
+      print('Download already in process of pausing: $url');
+      return;
+    }
+    
+    // Actualizar temporalmente el estado visual
+    item.tempStatus = 'pausing';
+    item.addLog('⏸ Pausing download...');
     item.currentSpeed = 0;
     _downloadController.add(item);
     
-    // Luego notificar al servidor
-    _connector.send({
-      'type': 'pause_download',
-      'url': url,
-    });
+    print('Sending pause command to server for: $url');
+    _sendCommandWithRetry('pause_download', url, 3);
   }
 
   void resumeDownload(String url) {
@@ -309,16 +317,24 @@ class DownloadService {
       return;
     }
     
-    // Actualizar UI primero
-    item.addLog('▶️ Resuming download');
-    item.status = DownloadStatus.downloading;
+    // Ver si ya está descargando o está reanudando
+    if (item.status == DownloadStatus.downloading) {
+      print('Download already running: $url');
+      return;
+    }
+    
+    if (item.tempStatus == 'resuming') {
+      print('Download already in process of resuming: $url');
+      return;
+    }
+    
+    // Actualizar temporalmente el estado visual
+    item.tempStatus = 'resuming';
+    item.addLog('▶️ Resuming download...');
     _downloadController.add(item);
     
-    // Luego notificar al servidor
-    _connector.send({
-      'type': 'resume_download',
-      'url': url,
-    });
+    print('Sending resume command to server for: $url');
+    _sendCommandWithRetry('resume_download', url, 3);
   }
 
   void cancelDownload(String url) {
@@ -326,7 +342,6 @@ class DownloadService {
     
     // Marcar URL como recientemente cancelada para evitar conflictos
     _recentlyCancelled.add(url);
-    
     // Programar su eliminación del conjunto después de un tiempo
     Timer(_recentCancelDuration, () {
       _recentlyCancelled.remove(url);
@@ -342,16 +357,14 @@ class DownloadService {
     
     item.addLog('❌ Download canceled');
     item.status = DownloadStatus.error;
-    
     // Notificar a la UI
     _downloadController.add(item);
     
     // Eliminar definitivamente del mapa INMEDIATAMENTE
     _downloads.remove(url);
-    
     print('Download $url completely removed from tracking');
   }
-
+    
   Stream<String> get progressStream => _connector.messageStream;
 
   void dispose() {
@@ -360,14 +373,12 @@ class DownloadService {
       timer.cancel();
     }
     _retryTimers.clear();
-    
     _downloadController.close();
     _connector.dispose();
-  }
+  } 
 
   void _handleProgressUpdate(Map<String, dynamic> data) {
     final url = data['url'];
-    
     // Ignorar actualización si la URL fue recientemente cancelada
     if (_recentlyCancelled.contains(url)) {
       print('Ignoring progress update for cancelled download: $url');
@@ -375,13 +386,11 @@ class DownloadService {
     }
     
     final item = _downloads[url];
-    
     if (item != null) {
       try {
         // Actualizar estado del item
         item.downloadedBytes = data['bytesReceived'] ?? 0;
         item.totalBytes = data['totalBytes'] ?? 0;
-        
         // Actualizar velocidad con historial
         double speed = 0.0;
         final rawSpeed = data['speed'];
@@ -392,7 +401,6 @@ class DownloadService {
         }
         
         item.updateSpeed(speed);
-        
         // Calcular progreso
         if (item.totalBytes > 0) {
           // Guardar el progreso anterior para comparar
@@ -411,7 +419,7 @@ class DownloadService {
             item.addLog('📥 $newProgressStr');
           }
         }
-
+        
         // Manejar diferentes estados
         final status = data['status'] as String? ?? 'downloading';
         switch(status) {
@@ -430,16 +438,14 @@ class DownloadService {
             item.status = DownloadStatus.completed;
             item.progress = 1.0;
             item.addLog('✅ Download completed successfully');
-            
             // Limpiar historial de chunks una vez completado para liberar memoria
             item.chunks.clear();
-            
             // El servidor ahora calculará el checksum por nosotros
             item.addLog('🔍 Requesting checksum calculation from server...');
             _requestChecksum(item.url, item.filename);
             break;
         }
-
+        
         // Notificar UI de cambios
         _downloadController.add(item);
       } catch (e) {
@@ -447,7 +453,7 @@ class DownloadService {
       }
     }
   }
-
+    
   void _requestChecksum(String url, String filename) {
     // Solicitar al servidor que calcule el checksum
     _connector.send({
@@ -455,8 +461,8 @@ class DownloadService {
       'url': url,
       'filename': filename,
     });
-  }
-
+  }     
+        
   void _handleChecksumResult(Map<String, dynamic> data) {
     final url = data['url'];
     final checksum = data['checksum'] as String;
@@ -468,15 +474,20 @@ class DownloadService {
     
     item.checksum = checksum;
     final seconds = duration / 1000.0;
-    item.addLog('✅ SHA-256 checksum calculated in ${seconds.toStringAsFixed(1)}s');
-    item.addLog('🔐 SHA-256: $checksum');
+    
+    // Un solo mensaje de log para el checksum para evitar duplicados
+    item.addLog('✅ SHA-256 checksum: $checksum (calculated in ${seconds.toStringAsFixed(1)}s)');
+    
+    // IMPORTANTE: Asegurarse de que el estado siga siendo "completed"
+    item.status = DownloadStatus.completed;
+    item.progress = 1.0;
     
     _downloadController.add(item);
-  }
+    print('Checksum completed for $url: $checksum');
+  } 
 
   void _handleErrorMessage(Map<String, dynamic> data) {
     final url = data['url'] as String;
-    
     // Ignorar errores si la URL fue recientemente cancelada
     if (_recentlyCancelled.contains(url)) {
       print('Ignoring error message for cancelled download: $url');
@@ -484,7 +495,6 @@ class DownloadService {
     }
     
     final errorMessage = data['message'] as String? ?? 'Unknown error';
-    
     final item = _downloads[url];
     if (item == null) return;
     
@@ -502,10 +512,8 @@ class DownloadService {
     if (retryCount < _maxRetries) {
       _retryCount[url] = retryCount + 1;
       final delay = Duration(seconds: retryCount + 1); // Delay más corto
-      
       item.addLog('🔄 Auto-retry ${retryCount + 1}/$_maxRetries in ${delay.inSeconds}s...');
       item.status = DownloadStatus.paused;
-      
       _retryTimers[url]?.cancel();
       _retryTimers[url] = Timer(delay, () {
         if (_downloads.containsKey(url)) {
@@ -525,7 +533,6 @@ class DownloadService {
 
   void _handleLogMessage(Map<String, dynamic> data) {
     final url = data['url'] as String;
-    
     // Ignorar mensajes si la URL fue recientemente cancelada
     if (_recentlyCancelled.contains(url)) {
       print('Ignoring log message for cancelled download: $url');
@@ -533,7 +540,6 @@ class DownloadService {
     }
     
     final message = data['message'] as String;
-    
     final item = _downloads[url];
     if (item == null) return;
     
@@ -553,24 +559,21 @@ class DownloadService {
     
     item.addLog(formattedMessage);
     print('Log added to download: $formattedMessage');
-    
     // Asegurarnos de notificar a los listeners
     _downloadController.add(item);
-  }
+  } 
 
   // Manejar confirmación de cancelación del servidor  
   void _handleCancelConfirmation(Map<String, dynamic> data) {
     final url = data['url'] as String;
     print('Server confirmed cancellation of $url');
-    
     // Asegurarnos que la URL esté marcada como recientemente cancelada
     _recentlyCancelled.add(url);
-    
     // Programar su eliminación del conjunto después de un tiempo
     Timer(_recentCancelDuration, () {
       _recentlyCancelled.remove(url);
     });
-  }
+  } 
 
   // Manejar información del servidor
   void _handleServerInfo(Map<String, dynamic> data) {
@@ -578,20 +581,18 @@ class DownloadService {
     print('- Implementation: ${data['implementation']}');
     print('- Features: ${data['features']}');
     print('- Chunks supported: ${data['chunks_supported']}');
-    
     final chunksSupported = data['chunks_supported'] as bool? ?? false;
     if (chunksSupported) {
       print('✅ Server supports chunked downloads');
     } else {
       print('⚠️ Server does not support chunked downloads');
     }
-  }
+  } 
 
   // Añadir manejadores para mensajes relacionados con chunks
   void _handleChunkInit(Map<String, dynamic> data) {
     final url = data['url'] as String;
     final chunkData = data['chunk'] as Map<String, dynamic>;
-    
     // Ignorar si la URL está en la lista de canceladas
     if (_recentlyCancelled.contains(url)) {
       print('Ignoring chunk init for cancelled download: $url');
@@ -603,15 +604,13 @@ class DownloadService {
     
     final chunk = ChunkInfo.fromJson(chunkData);
     item.updateChunk(chunk);
-    
     item.addLog('🧩 Chunk ${chunk.id+1}: ${_formatBytes((chunk.end - chunk.start + 1).toDouble())} bytes');
     _downloadController.add(item);
-  }
-
+  } 
+    
   void _handleChunkProgress(Map<String, dynamic> data) {
     final url = data['url'] as String;
     final chunkData = data['chunk'] as Map<String, dynamic>;
-    
     // Ignorar mensajes de chunks de descargas canceladas
     if (_recentlyCancelled.contains(url)) return;
     
@@ -622,33 +621,31 @@ class DownloadService {
     if (item.status == DownloadStatus.completed) return;
     
     final chunk = ChunkInfo.fromJson(chunkData);
-    
     // Actualizar el chunk en el mapa
     item.updateChunk(chunk);
     
     // Para reducir la carga en la UI, no actualizamos en cada mensaje
     // sino solo periódicamente o cuando hay cambios significativos
-    
     // Variables para control de frecuencia de actualizaciones
     final now = DateTime.now();
     final shouldUpdateUI = item.lastProgressLog == null || 
-        now.difference(item.lastProgressLog!) > Duration(milliseconds: 500);
+        now.difference(item.lastProgressLog!) > Duration(milliseconds: 1000); // Aumentar a 1 segundo
     
     if (shouldUpdateUI || chunk.status == 'completed') {
       item.lastProgressLog = now;
       _updateOverallProgress(item);
       
-      // Añadir log solo para cambios significativos - reducido a uno por cada ~10MB
+      // Añadir log solo para cambios significativos - reducido a uno por cada ~30MB
       if (chunk.progress > 0 && 
-          (chunk.progress % (10*1024*1024) < 1024*100) && 
+          (chunk.progress % (30*1024*1024) < 1024*100) && // Aumentado a 30MB
           chunk.status == 'active') {
         final chunkProgress = (chunk.progress * 100 / (chunk.end - chunk.start + 1)).toStringAsFixed(0);
         item.addLog('🧩 Chunk ${chunk.id+1}: $chunkProgress% at ${_formatSpeed(chunk.speed)}');
       }
     }
-  }
+  } 
 
-  // Método para calcular y actualizar el progreso general basado en chunks - simplificado para asegurar funcionamiento
+  // Método para calcular y actualizar el progreso general basado en chunks - corregido para evitar valores > 100%
   void _updateOverallProgress(DownloadItem item) {
     // Saltear si no hay chunks
     if (item.chunks.isEmpty) {
@@ -671,8 +668,12 @@ class DownloadService {
         totalDownloaded += chunkSize;
       } else if (chunk.status == 'active' && chunk.progress > 0) {
         // Chunk en progreso, contar lo descargado
-        totalDownloaded += chunk.progress.toDouble();
-        
+        // Asegurar que no contamos más bytes de los que tiene el chunk
+        double chunkProgress = chunk.progress.toDouble();
+        if (chunkProgress > chunkSize) {
+          chunkProgress = chunkSize; // Limitar para evitar conteo excesivo
+        }
+        totalDownloaded += chunkProgress;
         // Sumar velocidad si está activo
         totalSpeed += chunk.speed;
         activeChunks++;
@@ -683,30 +684,71 @@ class DownloadService {
       // Variables para controlar si debemos registrar un log
       final oldProgress = item.progress;
       final oldProgressInt = (oldProgress * 100).floor();
-      
-      // Establecer valores calculados directamente
+      // Establecer valores calculados directamente, pero asegurando que el progreso no exceda el 100%
       item.totalBytes = totalSize.toInt();
       item.downloadedBytes = totalDownloaded.toInt();
-      item.progress = totalDownloaded / totalSize;
-      
-      // Debug para ver qué está pasando
+      double newProgress = totalDownloaded / totalSize;
+      // Validar progreso para no exceder 1.0 (100%)
+      if (newProgress > 1.0) {
+        newProgress = 1.0;
+        print('Warning: Progress calculation exceeded 100%, capped at 100%');
+      }
+      item.progress = newProgress;
+      final oldPercentage = (oldProgress * 1000).floor() / 10;
       print('Progress updated: ${(item.progress * 100).toStringAsFixed(1)}% - $totalDownloaded/$totalSize bytes');
-      
-      // Sólo añadir log para cambios significativos (cada 1%)
+      // Mostrar progreso en log cada 1% (en lugar de 5%), pero evitar duplicados
       final newProgressInt = (item.progress * 100).floor();
       if (newProgressInt > oldProgressInt) {
         final progressPercent = (item.progress * 100).toStringAsFixed(1);
-        item.addLog('📥 $progressPercent%');
+        // Evitar duplicados en logs
+        final lastLog = item.logs.isNotEmpty ? item.logs.last : "";
+        if (!lastLog.contains('📥 $progressPercent%')) {
+          item.addLog('📥 $progressPercent%');
+        }
       }
-      
       // Actualizar velocidad
       if (activeChunks > 0 && totalSpeed > 0) {
         item.updateSpeed(totalSpeed);
+      } else if (item.tempStatus == 'pausing' || item.status == DownloadStatus.paused) {
+        // Si está pausado o pausando, velocidad debe ser cero
+        item.currentSpeed = 0;
+      }
+    }
+    // SIEMPRE notificar cambios al stream para actualizar la UI
+    _downloadController.add(item);
+  } 
+
+  // Nuevo método para enviar comandos con retry
+  void _sendCommandWithRetry(String commandType, String url, int maxRetries) {
+    int retries = 0;
+    bool success = false;
+    void attemptSend() {
+      try {
+        _connector.send({
+          'type': commandType,
+          'url': url,
+        });
+        print('Command $commandType sent successfully for $url');
+        success = true;
+      } catch (e) {
+        print('Error sending $commandType command: $e');
+        retries++;
+        if (retries < maxRetries) {
+          print('Retrying $commandType command ($retries/$maxRetries)...');
+          Future.delayed(Duration(milliseconds: 200), attemptSend);
+        } else {
+          print('Failed to send $commandType after $maxRetries attempts.');
+          // Revertir estado temporal si hay falla definitiva
+          final item = _downloads[url];
+          if (item != null) {
+            item.tempStatus = null;
+            _downloadController.add(item);
+          }
+        }
       }
     }
     
-    // SIEMPRE notificar cambios al stream para actualizar la UI
-    _downloadController.add(item);
+    attemptSend();
   }
 
   // Agregar nuevos handlers para confirmaciones
@@ -715,10 +757,18 @@ class DownloadService {
     print('Server confirmed pause of $url');
     
     final item = _downloads[url];
-    if (item != null && item.status != DownloadStatus.paused) {
+    if (item != null) {
+      // Limpiar tempStatus y actualizar estado definitivo
+      item.tempStatus = null;
+      item.pauseRetries = 0;
       item.status = DownloadStatus.paused;
       item.currentSpeed = 0;
+      item.addLog('⏸ Download paused successfully');
+      
+      print('Download state updated to paused for: $url');
       _downloadController.add(item);
+    } else {
+      print('Cannot update paused state: download not found for $url');
     }
   }
 
@@ -727,9 +777,17 @@ class DownloadService {
     print('Server confirmed resume of $url');
     
     final item = _downloads[url];
-    if (item != null && item.status != DownloadStatus.downloading) {
+    if (item != null) {
+      // Limpiar tempStatus y actualizar estado definitivo
+      item.tempStatus = null;
+      item.resumeRetries = 0;
       item.status = DownloadStatus.downloading;
+      item.addLog('▶️ Download resumed successfully');
+      
+      print('Download state updated to downloading for: $url');
       _downloadController.add(item);
+    } else {
+      print('Cannot update resumed state: download not found for $url');
     }
   }
 }
