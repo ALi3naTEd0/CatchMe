@@ -33,6 +33,66 @@
   - [ ] Download persistence across restarts
   - [ ] Download queue management
 
+## Phase 4: Service Integration & Distribution 🆕
+- [ ] System Service Integration
+  - [ ] Linux
+    - [ ] Systemd service integration
+    - [ ] XDG autostart support
+    - [ ] Desktop notifications
+    - [ ] AppImage packaging
+  - [ ] macOS
+    - [ ] LaunchAgent support
+    - [ ] Notification Center integration
+    - [ ] DMG packaging
+  - [ ] Windows
+    - [ ] Windows Service support
+    - [ ] System tray integration
+    - [ ] MSI installer packaging
+  - [ ] Mobile (Future)
+    - [ ] Background service for Android
+    - [ ] Background fetch for iOS
+    - [ ] Push notifications
+
+- [ ] Browser Integration
+  - [ ] Chrome extension
+  - [ ] Firefox add-on
+  - [ ] Edge extension
+  - [ ] Safari extension
+  
+- [ ] CI/CD Pipeline
+  - [ ] GitHub Actions for all platforms
+  - [ ] Automated testing
+  - [ ] Cross-platform builds
+  - [ ] Auto-updates system
+  - [ ] Code signing
+  
+- [ ] Packaging & Distribution
+  - [ ] Flatpak support
+  - [ ] Snap support
+  - [ ] Homebrew formula
+  - [ ] Chocolatey package
+  - [ ] Microsoft Store
+  - [ ] Mac App Store
+  - [ ] Google Play Store
+  - [ ] F-Droid
+
+## Service Improvements 🆕
+- [ ] Automatic Service Management
+  - [ ] Service auto-installation
+  - [ ] Auto-start with system
+  - [ ] Auto-recovery
+  - [ ] Clean shutdown
+  - [ ] Resource limits
+  - [ ] Update handling
+
+- [ ] Cross-Platform Features
+  - [ ] Native system notifications
+  - [ ] System tray integration
+  - [ ] Custom download folder per platform
+  - [ ] Platform-specific UI adjustments
+  - [ ] Native file dialogs
+  - [ ] Native share intents
+
 ## Current Issues Fixed 🛠️
 - [x] Fix server connection issues
 - [x] Fix type casting errors with speed values
