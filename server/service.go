@@ -29,13 +29,13 @@ func NewServiceManager(httpPort int) *ServiceManager {
 func (sm *ServiceManager) Setup() error {
 	// Configurar manejo de señales
 	signal.Notify(sm.shutdownSignal, syscall.SIGINT, syscall.SIGTERM)
-	
+
 	// Crear directorios necesarios
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("error getting home directory: %v", err)
 	}
-	
+
 	// Crear estructura de directorios
 	dirs := []string{
 		filepath.Join(homeDir, ".catchme"),
@@ -43,23 +43,23 @@ func (sm *ServiceManager) Setup() error {
 		filepath.Join(homeDir, ".catchme", "downloads"),
 		filepath.Join(homeDir, ".catchme", "temp"),
 	}
-	
+
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("error creating directory %s: %v", dir, err)
 		}
 	}
-	
+
 	// Configurar logging
 	logPath := filepath.Join(homeDir, ".catchme", "logs", "service.log")
 	sm.logFile, err = os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("error opening log file: %v", err)
 	}
-	
+
 	log.SetOutput(sm.logFile)
 	log.Println("CatchMe service initialized")
-	
+
 	return nil
 }
 
@@ -68,31 +68,31 @@ func (sm *ServiceManager) Start() error {
 	if sm.isRunning {
 		return fmt.Errorf("service already running")
 	}
-	
+
 	// Iniciar el servidor HTTP en segundo plano
 	go func() {
-		if err := startHTTPServer(sm.httpPort); err != nil {
+		if err := startHTTPServer(); err != nil {
 			log.Printf("HTTP server error: %v", err)
 		}
 	}()
-	
+
 	// Iniciar WebSocket en segundo plano
 	go func() {
 		if err := startWebSocketServer(); err != nil {
 			log.Printf("WebSocket server error: %v", err)
 		}
 	}()
-	
+
 	sm.isRunning = true
 	log.Printf("CatchMe service started - HTTP on port %d, WebSocket enabled", sm.httpPort)
-	
+
 	// Esperar señal de apagado
 	go func() {
 		sig := <-sm.shutdownSignal
 		log.Printf("Received signal: %v", sig)
 		sm.Stop()
 	}()
-	
+
 	return nil
 }
 
@@ -101,21 +101,21 @@ func (sm *ServiceManager) Stop() {
 	if !sm.isRunning {
 		return
 	}
-	
+
 	log.Println("Stopping CatchMe service...")
-	
+
 	// Cerrar conexiones activas y detener servidores
 	stopHTTPServer()
 	stopWebSocketServer()
-	
+
 	// Limpiar recursos temporales
 	cleanupTemporaryFiles()
-	
+
 	sm.isRunning = false
 	if sm.logFile != nil {
 		sm.logFile.Close()
 	}
-	
+
 	log.Println("CatchMe service stopped")
 }
 
@@ -125,7 +125,8 @@ func (sm *ServiceManager) IsRunning() bool {
 }
 
 // Funciones auxiliares para el servidor
-func startHTTPServer(port int) error {
+// Remover el parámetro port no utilizado
+func startHTTPServer() error {
 	// Implementación del servidor HTTP
 	return nil
 }
@@ -150,15 +151,15 @@ func cleanupTemporaryFiles() {
 // RunAsService ejecuta la aplicación como un servicio
 func RunAsService(httpPort int) error {
 	service := NewServiceManager(httpPort)
-	
+
 	if err := service.Setup(); err != nil {
 		return fmt.Errorf("service setup failed: %v", err)
 	}
-	
+
 	if err := service.Start(); err != nil {
 		return fmt.Errorf("service start failed: %v", err)
 	}
-	
+
 	// Mantenerse en ejecución hasta recibir señal
 	select {}
 }

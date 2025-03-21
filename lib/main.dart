@@ -5,9 +5,8 @@ import 'settings_screen.dart';
 import 'server_launcher.dart';  // Update import path
 
 void main() async {
+  // Quitar debug banner
   WidgetsFlutterBinding.ensureInitialized();
-  
-  print('\n=== CatchMe Iniciando ===');
   runApp(const MyApp());
 }
 
@@ -20,6 +19,7 @@ class MyApp extends StatelessWidget {
     final accentColor = Colors.blue[300] ?? Colors.blue;
 
     return MaterialApp(
+      debugShowCheckedModeBanner: false, // Quitar banner de debug
       title: 'CatchMe',
       theme: ThemeData(
         colorScheme: ColorScheme.dark(

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // Agregar esta línea para Clipboard
+import 'package:flutter/services.dart'; // Para Clipboard
+import 'dart:async'; // Para Timer
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'download_item.dart';
@@ -16,6 +17,13 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   final _downloadService = DownloadService();
   final _urlController = TextEditingController();
   bool _serviceInitialized = false;
+  Timer? _clipboardCheckTimer;
+  
+  // Mapa para mantener un ScrollController por cada URL
+  final Map<String, ScrollController> _scrollControllers = {};
+  
+  // Set para rastrear URLs ya procesadas
+  final Set<String> _clipboardProcessedUrls = {};
 
   @override
   void initState() {
@@ -23,9 +31,10 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     // Inicialización retrasada para asegurar que el servidor esté listo
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initService();
+      _startClipboardMonitoring();
     });
   }
-  
+
   Future<void> _initService() async {
     // Esperar un poco para asegurar que el servidor esté listo
     await Future.delayed(const Duration(milliseconds: 800));
@@ -35,64 +44,83 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     });
   }
 
-  void _showAddDownloadDialog(BuildContext context) {
-    bool useChunks = true; // por defecto activado
+  // Verificar clipboard periódicamente
+  void _startClipboardMonitoring() {
+    _clipboardCheckTimer = Timer.periodic(Duration(seconds: 2), (_) {
+      _checkClipboardForUrl();
+    });
+  }
+
+  // Verificar si hay una URL en el clipboard
+  Future<void> _checkClipboardForUrl() async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      if (data != null && data.text != null) {
+        final text = data.text!;
+        if (_isValidUrl(text) && !_clipboardProcessedUrls.contains(text)) {
+          _clipboardProcessedUrls.add(text); // Evitar procesar la misma URL múltiples veces
+          _showClipboardUrlNotification(text);
+        }
+      }
+    } catch (e) {
+      print('Error checking clipboard: $e');
+    }
+  }
+
+  // Verificar si es una URL válida
+  bool _isValidUrl(String text) {
+    return text.startsWith('http://') || text.startsWith('https://');
+  }
+
+  // Mostrar notificación para URL detectada
+  void _showClipboardUrlNotification(String url) {
+    if (!mounted) return;
     
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _urlController.text = url;
+      _showAddDownloadDialog(context);
+    });
+  }
+
+  void _showAddDownloadDialog(BuildContext context) {
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('New Download'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: _urlController,
-                decoration: const InputDecoration(
-                  labelText: 'URL',
-                  hintText: 'https://example.com/file.zip',
-                  border: OutlineInputBorder(),
-                ),
-                autofocus: true,
-                onSubmitted: (url) {
-                  Navigator.of(context).pop();
-                  _startDownload(context, url, useChunks);
-                },
+      builder: (context) => AlertDialog(
+        title: const Text('New Download'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _urlController,
+              decoration: const InputDecoration(
+                labelText: 'URL',
+                hintText: 'https://example.com/file.zip',
+                border: OutlineInputBorder(),
               ),
-              const SizedBox(height: 16),
-              // Opción para usar chunks
-              SwitchListTile(
-                title: const Text('Use chunked download'),
-                subtitle: Text(
-                  'Download file in multiple parallel connections',
-                  style: TextStyle(fontSize: 12),
-                ),
-                value: useChunks,
-                onChanged: (value) {
-                  setState(() {
-                    useChunks = value;
-                  });
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final url = _urlController.text;
-                if (url.isNotEmpty) {
-                  Navigator.of(context).pop();
-                  _startDownload(context, url, useChunks);
-                }
+              autofocus: true,
+              onSubmitted: (url) {
+                Navigator.of(context).pop();
+                _startDownload(context, url, true); // Siempre usar chunks por defecto
               },
-              child: const Text('Download'),
             ),
           ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final url = _urlController.text;
+              if (url.isNotEmpty) {
+                Navigator.of(context).pop();
+                _startDownload(context, url, true); // Siempre usar chunks por defecto
+              }
+            },
+            child: const Text('Download'),
+          ),
+        ],
       ),
     );
   }
@@ -119,8 +147,35 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
 
   @override
   void dispose() {
+    _clipboardCheckTimer?.cancel();
+    
+    // Limpiar todos los ScrollControllers
+    for (final controller in _scrollControllers.values) {
+      controller.dispose();
+    }
+    _scrollControllers.clear();
     _urlController.dispose();
     super.dispose();
+  }
+
+  // Obtener o crear un ScrollController para una URL
+  ScrollController _getScrollController(String url) {
+    if (!_scrollControllers.containsKey(url)) {
+      _scrollControllers[url] = ScrollController();
+    }
+    
+    // Programar un scroll al final después de la construcción
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollControllers[url]!.hasClients) {
+        _scrollControllers[url]!.animateTo(
+          _scrollControllers[url]!.position.maxScrollExtent,
+          duration: Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+    
+    return _scrollControllers[url]!;
   }
 
   @override
@@ -171,40 +226,32 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
 
   Widget _buildDownloadCard(DownloadItem download) {
     final accent = Colors.blue[300] ?? Colors.blue;
+    
+    // Add action icon and button logic
+    final actionIcon = download.status == DownloadStatus.downloading 
+        ? Icons.pause
+        : download.status == DownloadStatus.paused 
+            ? Icons.play_arrow 
+            : Icons.folder_open;
+            
+    final enableButton = download.status == DownloadStatus.downloading ||
+                        download.status == DownloadStatus.paused ||
+                        download.status == DownloadStatus.completed;
+
+    // Clean up layout variables
     final screenWidth = MediaQuery.of(context).size.width;
     final isMobile = screenWidth < 800;
     
-    // Estado para controlar la expansión del log y chunks
+    // Get current states
     bool expandLog = download.expandLog ?? false;
     bool expandChunks = download.expandChunks ?? false;
     
-    // Determinar qué icono mostrar basado en el estado y el estado temporal
-    IconData actionIcon;
-    bool enableButton = true;
-    
-    // Lógica para el icono de acción basado en el estado + estado temporal
-    if (download.tempStatus == 'pausing') {
-      actionIcon = Icons.hourglass_top;
-      enableButton = false;  // Deshabilitar botón mientras se procesa
-    } else if (download.tempStatus == 'resuming') {
-      actionIcon = Icons.hourglass_bottom;
-      enableButton = false;  // Deshabilitar botón mientras se procesa
-    } else if (download.status == DownloadStatus.downloading) {
-      actionIcon = Icons.pause;
-    } else if (download.status == DownloadStatus.paused) {
-      actionIcon = Icons.play_arrow;
-    } else if (download.status == DownloadStatus.completed) {
-      actionIcon = Icons.folder_open;
-    } else {
-      actionIcon = Icons.pause;  // Valor por defecto
-    }
-
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header con filename y controles
+          // Header with filename and controls
           Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
@@ -259,12 +306,12 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
             ),
           ),
           
-          // Barra de progreso con stats
+          // Progress section with speed stats
           Container(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: Column(
               children: [
-                // Progreso y Size
+                // Progress and Size
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -284,9 +331,9 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                 ),
                 const SizedBox(height: 8),
                 
-                // Barra de progreso
+                // Progress bar
                 LinearProgressIndicator(
-                  value: download.progress,
+                  value: download.progress.clamp(0.0, 1.0), // Ensure progress is clamped
                   backgroundColor: Colors.grey[800],
                   valueColor: AlwaysStoppedAnimation<Color>(accent),
                   minHeight: 6,
@@ -413,156 +460,20 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                     ],
                   ),
                               
-                // Mini log con toggle para expandir/contraer
-                if (download.logs.isNotEmpty)
-                  AnimatedContainer(
-                    duration: Duration(milliseconds: 200),
-                    margin: const EdgeInsets.only(top: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[900],
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: accent.withOpacity(0.2)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        InkWell(
-                          onTap: () {
-                            setState(() {
-                              download.expandLog = !expandLog;
-                            });
-                          },
-                          child: Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  'Download Log',
-                                  style: TextStyle(fontWeight: FontWeight.bold),
-                                ),
-                                Row(
-                                  children: [
-                                    IconButton(
-                                      icon: const Icon(Icons.copy, size: 16),
-                                      onPressed: () => _copyLogs(download),
-                                      tooltip: 'Copy logs',
-                                    ),
-                                    Icon(
-                                      expandLog ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                                      color: accent,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        
-                        // Logs que aparecen solo cuando está expandido
-                        AnimatedContainer(
-                          duration: Duration(milliseconds: 200),
-                          height: expandLog ? 150 : 0,
-                          curve: Curves.easeInOut,
-                          child: Container(
-                            constraints: BoxConstraints(
-                              minHeight: expandLog ? 150 : 0,
-                              maxHeight: expandLog ? 150 : 0,
-                            ),
-                            child: ListView.builder(
-                              reverse: true,
-                              itemCount: download.logs.length,
-                              padding: EdgeInsets.all(8),
-                              itemExtent: 18.0,
-                              itemBuilder: (_, i) => SelectableText(
-                                download.logs[download.logs.length - i - 1],
-                                style: const TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: 11,
-                                  color: Colors.white70,
-                                  height: 1.2,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                // Mini log y chunks section
+                Container(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: Column(
+                    children: [
+                      // Solo mostrar Log y Chunks, quitar sección de SHA-256
+                      if (download.logs.isNotEmpty)
+                        _buildLogSection(download, expandLog, accent),
+                      
+                      if (download.chunks.isNotEmpty)
+                        _buildChunksSection(download, expandChunks, accent),
+                    ],
                   ),
-
-                // Chunks siempre visibles pero colapsables
-                if (download.chunks.isNotEmpty)
-                  AnimatedContainer(
-                    duration: Duration(milliseconds: 200),
-                    margin: const EdgeInsets.only(top: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[900],
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: accent.withOpacity(0.3)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        InkWell(
-                          onTap: () {
-                            setState(() {
-                              download.expandChunks = !expandChunks;
-                            });
-                          },
-                          child: Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  'Download Chunks (${download.chunks.length})',
-                                  style: TextStyle(fontWeight: FontWeight.bold),
-                                ),
-                                Row(
-                                  children: [
-                                    Text(
-                                      '${download.chunks.values.where((c) => c.status == 'completed').length}/${download.chunks.length}',
-                                      style: TextStyle(fontSize: 12, color: Colors.grey[400]),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.copy, size: 16),
-                                      onPressed: () => _copyChunksInfo(download),
-                                      tooltip: 'Copy chunks info',
-                                    ),
-                                    Icon(
-                                      expandChunks ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                                      color: accent,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        
-                        // Chunks que aparecen solo cuando está expandido
-                        AnimatedContainer(
-                          duration: Duration(milliseconds: 200),
-                          height: expandChunks ? null : 48,
-                          curve: Curves.easeInOut,
-                          child: SingleChildScrollView(
-                            padding: EdgeInsets.all(8),
-                            physics: expandChunks ? AlwaysScrollableScrollPhysics() : NeverScrollableScrollPhysics(),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (expandChunks)
-                                  ..._buildExpandedChunksContent(download, accent)
-                                else
-                                  _buildCollapsedChunksContent(download, accent),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                ),
               ],
             ),
           ),
@@ -640,12 +551,10 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
     int unitIndex = 0;
     double value = bytesPerSecond;
-    
     while (value > 1024 && unitIndex < units.length - 1) {
       value /= 1024;
-      unitIndex++; 
+      unitIndex++;
     }
-    
     return '${value.toStringAsFixed(1)} ${units[unitIndex]}';
   }
 
@@ -714,7 +623,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       _openFileLocation(download);
       return;
     }
-
+    
     if (download.status == DownloadStatus.downloading) {
       print('UI: Pausing download: ${download.url}');
       _downloadService.pauseDownload(download.url);
@@ -726,39 +635,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     }
   }
 
-  // Agregar métodos para copiar información
-  void _copyLogs(DownloadItem download) {
-    final logs = download.logs.join('\n');
-    Clipboard.setData(ClipboardData(text: logs));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Logs copied to clipboard')),
-    );
-  }
-
-  void _copyChunksInfo(DownloadItem download) {
-    final buffer = StringBuffer();
-    buffer.writeln('Chunks status for ${download.filename}:');
-    buffer.writeln('Total chunks: ${download.chunks.length}');
-    buffer.writeln('Completed: ${download.chunks.values.where((c) => c.status == 'completed').length}');
-    buffer.writeln('\nDetailed chunks info:');
-    
-    final sortedChunks = download.chunks.values.toList()
-      ..sort((a, b) => a.id.compareTo(b.id));
-    
-    for (var chunk in sortedChunks) {
-      buffer.writeln('Chunk #${chunk.id + 1}:');
-      buffer.writeln('  Status: ${chunk.status}');
-      buffer.writeln('  Progress: ${(chunk.progressPercentage * 100).toStringAsFixed(1)}%');
-      buffer.writeln('  Size: ${_formatBytes((chunk.end - chunk.start + 1).toDouble())}');
-    }
-
-    Clipboard.setData(ClipboardData(text: buffer.toString()));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Chunks info copied to clipboard')),
-    );
-  }
-
-  // Nuevos métodos auxiliares para la UI de chunks
+  // Métodos auxiliares para la UI de chunks
   List<Widget> _buildExpandedChunksContent(DownloadItem download, Color accent) {
     final sections = [
       ('active', 'Active Chunks', accent),
@@ -786,26 +663,6 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     return widgets;
   }
 
-  Widget _buildCollapsedChunksContent(DownloadItem download, Color accent) {
-    return Row(
-      children: [
-        Expanded(
-          child: LinearProgressIndicator(
-            value: download.progress,
-            backgroundColor: Colors.grey[800],
-            valueColor: AlwaysStoppedAnimation<Color>(accent),
-            minHeight: 8,
-          ),
-        ),
-        SizedBox(width: 8),
-        Text(
-          '${download.chunks.values.where((c) => c.status == 'active').length} active',
-          style: TextStyle(fontSize: 10),
-        ),
-      ],
-    );
-  }
-
   // Agregar método _formatBytes que faltaba
   String _formatBytes(double bytes) {
     if (bytes <= 0) return '0 B';
@@ -816,5 +673,144 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       i++;
     }
     return '${bytes.toStringAsFixed(1)} ${suffixes[i]}';
+  }
+
+  Widget _buildLogSection(DownloadItem download, bool expandLog, Color accent) {
+    // Usar un ValueListenableBuilder para evitar reconstruir todo el widget
+    return AnimatedContainer(
+      duration: Duration(milliseconds: 200),
+      margin: const EdgeInsets.only(top: 16),
+      decoration: BoxDecoration(
+        color: Colors.grey[900],
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: accent.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () {
+              setState(() {
+                download.expandLog = !expandLog;
+              });
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Download Log',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  Icon(
+                    expandLog ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                    color: accent,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          // Usar un RepaintBoundary para aislar las actualizaciones del log
+          RepaintBoundary(
+            child: AnimatedContainer(
+              duration: Duration(milliseconds: 200),
+              height: expandLog ? 150 : 0,
+              child: Container(
+                constraints: BoxConstraints(
+                  minHeight: expandLog ? 150 : 0,
+                  maxHeight: expandLog ? 150 : 0,
+                ),
+                child: ListView.builder(
+                  controller: _getScrollController(download.url),
+                  itemCount: download.logs.length,
+                  padding: EdgeInsets.all(8),
+                  // Usar cacheExtent para mantener más items en memoria
+                  cacheExtent: 20,
+                  itemExtent: 18.0,
+                  itemBuilder: (_, i) {
+                    final log = download.logs[i];
+                    return SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Text(
+                        log,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          color: Colors.white70,
+                          height: 1.2,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChunksSection(DownloadItem download, bool expandChunks, Color accent) {
+    return AnimatedContainer(
+      duration: Duration(milliseconds: 200),
+      margin: const EdgeInsets.only(top: 16),
+      decoration: BoxDecoration(
+        color: Colors.grey[900],
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: accent.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () {
+              setState(() {
+                download.expandChunks = !expandChunks;
+              });
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Download Chunks',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  Row(
+                    children: [
+                      Text(
+                        '${download.chunks.values.where((c) => c.status == 'completed').length}/${download.chunks.length}',
+                        style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                      ),
+                      Icon(
+                        expandChunks ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                        color: accent,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          AnimatedContainer(
+            duration: Duration(milliseconds: 200),
+            height: expandChunks ? null : 0,
+            child: expandChunks 
+              ? Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Column(
+                    children: _buildExpandedChunksContent(download, accent),
+                  ),
+                )
+              : const SizedBox.shrink(),
+          ),
+        ],
+      ),
+    );
   }
 }

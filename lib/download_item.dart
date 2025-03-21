@@ -25,12 +25,21 @@ class DownloadItem {
   // Mapa para almacenar información de chunks
   final Map<int, dynamic> chunks = {};
 
-  // Historial de velocidades para calcular promedio
-  static const int _maxHistoryEntries = 50;  // Aumentar historial
+  // Ajustes de configuración para velocidad y ETA
+  static const int _maxSpeedHistory = 12;      // Aumentado de 8 a 12
+  static const int _maxEtaHistory = 8;         // Aumentado de 3 a 8
+  static const double _etaAlpha = 0.2;         // Reducido de 0.3 a 0.2 para más suavidad
+  static const double _speedAlpha = 0.1;       // Reducido de 0.15 a 0.1
+  static const Duration _speedUpdateInterval = Duration(milliseconds: 1000);
+  
+  // Variables para control de velocidad y ETA
   final List<double> _speedHistory = [];
+  final List<double> _etaHistory = [];
   DateTime _lastSpeedUpdate = DateTime.now();
   double _speedAccumulator = 0;
   int _speedSampleCount = 0;
+  double _smoothedSpeed = 0.0;
+  double _lastEta = 0.0;
 
   // Estado UI para expandir/contraer log y chunks
   bool? expandLog;
@@ -40,6 +49,7 @@ class DownloadItem {
   int? pauseRetries;
   int? resumeRetries;
 
+  // Modificar constructor para mantener chunks al completar
   DownloadItem({
     required this.url,
     required this.filename,
@@ -51,9 +61,12 @@ class DownloadItem {
     this.status = DownloadStatus.queued,
     this.tempStatus,
     this.error,
-    this.expandLog = false,
+    this.expandLog = true,
     this.expandChunks = false,
-  }) : startTime = DateTime.now();
+  }) : startTime = DateTime.now() {
+    // Inicializar mapa de chunks vacío pero no nulo
+    chunks.clear();
+  }
 
   String get formattedProgress => '${(progress * 100).toStringAsFixed(1)}%';
   String get formattedSpeed => _formatSpeed(currentSpeed);
@@ -77,16 +90,28 @@ class DownloadItem {
   }
 
   String get eta {
-    if (currentSpeed <= 0) return '--:--:--';
-    final remaining = totalBytes - downloadedBytes;
-    final seconds = remaining / currentSpeed;
-    if (!seconds.isFinite) return '--:--:--';
+    if (currentSpeed <= 0 || !currentSpeed.isFinite) return '--:--:--';
     
-    final duration = Duration(seconds: seconds.round());
-    final hours = duration.inHours.toString().padLeft(2, '0');
-    final minutes = (duration.inMinutes % 60).toString().padLeft(2, '0');
-    final secs = (duration.inSeconds % 60).toString().padLeft(2, '0');
-    return '$hours:$minutes:$secs';
+    final remaining = totalBytes - downloadedBytes;
+    if (remaining <= 0) return '00:00:00';
+
+    // More responsive ETA calculation
+    final etaSeconds = remaining / currentSpeed;
+    if (!etaSeconds.isFinite || etaSeconds <= 0) return '--:--:--';
+
+    // Use 0.3/0.7 ratio for more responsive updates
+    _lastEta = _lastEta == 0 ? etaSeconds : (_lastEta * 0.3 + etaSeconds * 0.7);
+
+    final duration = Duration(seconds: _lastEta.round());
+    
+    // Formatear sin exceder 99:59:59
+    int hours = duration.inHours.clamp(0, 99);
+    int minutes = (duration.inMinutes % 60).clamp(0, 59);
+    int seconds = (duration.inSeconds % 60).clamp(0, 59);
+    
+    return '${hours.toString().padLeft(2, '0')}:'
+           '${minutes.toString().padLeft(2, '0')}:'
+           '${seconds.toString().padLeft(2, '0')}';
   }
 
   // Agregar getter para elapsed time
@@ -163,40 +188,29 @@ class DownloadItem {
   void updateSpeed(double newSpeed) {
     if (!newSpeed.isFinite || newSpeed < 0) return;
 
-    // Actualizar velocidad actual
-    currentSpeed = newSpeed;
-    
-    // Acumular para promedio móvil
-    _speedAccumulator += newSpeed;
-    _speedSampleCount++;
-    
-    // Actualizar promedio cada segundo
     final now = DateTime.now();
-    if (now.difference(_lastSpeedUpdate) >= const Duration(seconds: 1)) {
-      if (_speedSampleCount > 0) {
-        final avgSpeed = _speedAccumulator / _speedSampleCount;
-        _speedHistory.add(avgSpeed);
-        if (_speedHistory.length > _maxHistoryEntries) {
-          _speedHistory.removeAt(0);
-        }
-        
-        // Calcular promedio general excluyendo valores extremos
-        if (_speedHistory.length >= 3) {
-          var speeds = List<double>.from(_speedHistory);
-          speeds.sort();
-          // Remover 10% superior e inferior
-          final trimCount = (speeds.length * 0.1).round();
-          if (trimCount > 0) {
-            speeds = speeds.sublist(trimCount, speeds.length - trimCount);
-          }
-          averageSpeed = speeds.reduce((a, b) => a + b) / speeds.length;
-        }
-      }
-      
-      // Reiniciar acumuladores
-      _speedAccumulator = 0;
-      _speedSampleCount = 0;
-      _lastSpeedUpdate = now;
+    if (now.difference(_lastSpeedUpdate) < _speedUpdateInterval) {
+      return; // Ignorar actualizaciones demasiado frecuentes
+    }
+    _lastSpeedUpdate = now;
+
+    // Implementar suavizado exponencial con alfa más bajo
+    const alpha = 0.15; // Reducir factor de suavizado para más estabilidad
+    _smoothedSpeed = _smoothedSpeed == 0 
+        ? newSpeed 
+        : (_smoothedSpeed * (1 - alpha) + newSpeed * alpha);
+
+    currentSpeed = _smoothedSpeed;
+    
+    // Mantener historial más corto
+    _speedHistory.add(_smoothedSpeed);
+    if (_speedHistory.length > _maxSpeedHistory) {
+      _speedHistory.removeAt(0);
+    }
+    
+    // Calcular promedio móvil para velocidad promedio
+    if (_speedHistory.length >= 3) {
+      averageSpeed = _speedHistory.reduce((a, b) => a + b) / _speedHistory.length;
     }
   }
 
@@ -247,5 +261,17 @@ class DownloadItem {
       default:
         return 'Unknown';
     }
+  }
+
+  // Agregar método para formatear el checksum en múltiples líneas
+  String get formattedChecksum {
+    if (checksum == null) return '';
+    // Dividir el checksum en grupos de 32 caracteres
+    final parts = <String>[];
+    for (var i = 0; i < checksum!.length; i += 32) {
+      final end = i + 32;
+      parts.add(checksum!.substring(i, end > checksum!.length ? checksum!.length : end));
+    }
+    return parts.join('\n');
   }
 }

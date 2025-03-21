@@ -34,8 +34,9 @@ dependencies:
   path_provider: ^2.1.2
   web_socket_channel: ^2.4.0
   path: ^1.8.3
-  crypto: ^3.0.3  # Agregar esta línea
+  crypto: ^3.0.3
   cupertino_icons: ^1.0.8
+  shared_preferences: ^2.2.0  # Añadir esta dependencia
 
 dev_dependencies:
   flutter_test:

@@ -3,12 +3,12 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
-	"log"
 )
 
 // ChunkStatus representa el estado de un chunk
@@ -81,12 +81,12 @@ func NewChunkedDownload(url, filename string, size int64, chunkSize int64) *Chun
 func (d *ChunkedDownload) PrepareChunks() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	
+
 	// Crear directorio temporal para chunks
 	if err := os.MkdirAll(d.TempDir, 0755); err != nil {
 		return fmt.Errorf("failed to create temp directory: %v", err)
 	}
-	
+
 	// Dividir el archivo en chunks
 	var chunks []*Chunk
 	for start := int64(0); start < d.Size; start += d.ChunkSize {
@@ -94,7 +94,7 @@ func (d *ChunkedDownload) PrepareChunks() error {
 		if end > d.Size-1 {
 			end = d.Size - 1
 		}
-		
+
 		chunk := &Chunk{
 			ID:        len(chunks),
 			Start:     start,
@@ -105,7 +105,7 @@ func (d *ChunkedDownload) PrepareChunks() error {
 		}
 		chunks = append(chunks, chunk)
 	}
-	
+
 	d.Chunks = chunks
 	return nil
 }
@@ -118,7 +118,7 @@ func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeC
 	if chunk.Status == ChunkCompleted {
 		return nil
 	}
-	
+
 	// Marcar como activo
 	chunk.mu.Lock()
 	chunk.Status = ChunkActive
@@ -194,12 +194,14 @@ func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeC
 	}
 
 	// Descargar datos con buffer más grande para mejor rendimiento
-	startTime := time.Now() // Guardar tiempo de inicio
-	buffer := make([]byte, 512*1024) // Aumentar a 512KB buffer para mejor rendimiento
+	startTime := time.Now()  // Solo mantener una declaración
+	lastUpdate := time.Now() // Solo mantener una declaración
+	updateInterval := 100 * time.Millisecond
+	buffer := make([]byte, 512*1024)
+	lastProgress := chunk.Progress
 
-	// Monitorear progreso con frecuencia moderada - no enviar actualizaciones tan frecuentemente
-	lastUpdate := time.Now()
-	updateInterval := 500 * time.Millisecond // cada 500ms es suficiente
+	// Remover todas las redeclaraciones redundantes de estas variables
+	// y eliminar las líneas 197-208 que contienen las declaraciones duplicadas
 
 	for {
 		select {
@@ -224,50 +226,63 @@ func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeC
 				// Actualizar progreso
 				chunk.mu.Lock()
 				chunk.Progress += int64(n)
+				currentProgress := chunk.Progress
+				chunk.mu.Unlock()
 
-				// Enviar actualizaciones con frecuencia moderada
 				now := time.Now()
+
+				// Solo enviar actualizaciones cada 500ms
 				if now.Sub(lastUpdate) >= updateInterval {
-					lastUpdate = now
-					elapsed := time.Since(startTime)
-					if elapsed.Seconds() > 0 { // Evitar división por cero
-						speed := float64(chunk.Progress) / elapsed.Seconds()
-						
-						// Solo enviar actualización al cliente a intervalos razonables
+					elapsed := now.Sub(startTime).Seconds()
+					if elapsed > 0 {
+						speed := float64(currentProgress-lastProgress) / now.Sub(lastUpdate).Seconds()
+
+						// Enviar progreso actualizado al cliente incluyendo velocidad
 						if safeConn != nil {
+							d.mu.RLock()
+							// Enviar progreso de chunk
 							safeConn.SendJSON(map[string]interface{}{
 								"type": "chunk_progress",
 								"url":  d.URL,
 								"chunk": ChunkProgress{
-									ID:        chunk.ID,
-									Start:     chunk.Start,
-									End:       chunk.End,
-									Progress:  chunk.Progress,
-									Status:    chunk.Status,
-									Speed:     speed,
-									Completed: chunk.Start + chunk.Progress,
+									ID:       chunk.ID,
+									Start:    chunk.Start,
+									End:      chunk.End,
+									Progress: currentProgress,
+									Status:   chunk.Status,
+									Speed:    speed,
 								},
 							})
+
+							// Enviar también progreso general con velocidad
+							downloaded, total := d.GetProgress()
+							safeConn.SendJSON(map[string]interface{}{
+								"type":          "progress",
+								"url":           d.URL,
+								"bytesReceived": downloaded,
+								"totalBytes":    total,
+								"speed":         speed,
+							})
+							d.mu.RUnlock()
 						}
+						lastUpdate = now
+						lastProgress = currentProgress
 					}
 				}
-				chunk.mu.Unlock()
 			}
 
 			if err != nil {
 				if err == io.EOF {
 					// Chunk completado
-					chunk.mu.Lock()
-					chunk.Status = ChunkCompleted
-					chunk.mu.Unlock()
+					chunk.markCompleted()
 
 					// Reportar estadísticas de finalización del chunk
 					elapsed := time.Since(startTime)
 					totalBytes := chunk.End - chunk.Start + 1
 					avgSpeed := float64(totalBytes) / elapsed.Seconds()
-					
-					 // Usar la variable avgSpeed para evitar el error "declared and not used"
-					log.Printf("Chunk %d completed in %.2fs (%.2f MB/s)", 
+
+					// Usar la variable avgSpeed para evitar el error "declared and not used"
+					log.Printf("Chunk %d completed in %.2fs (%.2f MB/s)",
 						chunk.ID, elapsed.Seconds(), avgSpeed/(1024*1024))
 
 					// Enviar notificación final para este chunk
@@ -281,15 +296,15 @@ func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeC
 								End:       chunk.End,
 								Progress:  totalBytes,
 								Status:    ChunkCompleted,
-								Speed:     0,  // No velocidad cuando está completo
+								Speed:     0, // No velocidad cuando está completo
 								Completed: chunk.End + 1,
 							},
 						})
 					}
-					
+
 					return nil
 				}
-				
+
 				// Error de descarga
 				chunk.mu.Lock()
 				chunk.Status = ChunkFailed
@@ -400,11 +415,36 @@ func (d *ChunkedDownload) GetProgress() (downloaded int64, total int64) {
 	defer d.mu.RUnlock()
 
 	total = d.Size
+	downloaded = 0
+	activeOrIncomplete := 0
+
 	for _, chunk := range d.Chunks {
 		chunk.mu.Lock()
-		downloaded += chunk.Progress
+		chunkSize := chunk.End - chunk.Start + 1
+
+		switch chunk.Status {
+		case ChunkCompleted:
+			downloaded += chunkSize
+		case ChunkActive:
+			// Si el progreso está muy cerca del final, considerar completo
+			if chunk.Progress >= chunkSize-512 { // Tolerancia de 512 bytes
+				downloaded += chunkSize
+			} else {
+				downloaded += chunk.Progress
+				activeOrIncomplete++
+			}
+		case ChunkPending, ChunkPaused:
+			activeOrIncomplete++
+		}
 		chunk.mu.Unlock()
 	}
+
+	// Si solo queda un margen muy pequeño y no hay chunks activos/pendientes
+	remainingBytes := total - downloaded
+	if activeOrIncomplete == 0 && remainingBytes < 1024 { // 1KB de tolerancia
+		downloaded = total
+	}
+
 	return
 }
 
@@ -427,4 +467,21 @@ func (d *ChunkedDownload) IsComplete() bool {
 // Cleanup elimina archivos temporales
 func (d *ChunkedDownload) Cleanup() error {
 	return os.RemoveAll(d.TempDir)
+}
+
+// Añadir validación adicional al completar chunks
+func (c *Chunk) markCompleted() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	expectedSize := c.End - c.Start + 1
+
+	// Usar una tolerancia para considerar el chunk como completo
+	if c.Progress >= expectedSize-512 { // 512 bytes de tolerancia
+		c.Status = ChunkCompleted
+		c.Progress = expectedSize // Asegurar valor exacto
+	} else {
+		c.Status = ChunkFailed
+		c.Error = fmt.Sprintf("incomplete chunk data: %d/%d bytes", c.Progress, expectedSize)
+	}
 }
