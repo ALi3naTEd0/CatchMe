@@ -198,6 +198,12 @@ class DownloadService {
           case 'checksum_result':
             _handleChecksumResult(data);
             break;
+          case 'download_complete':
+            _handleDownloadComplete(data);
+            break;
+          case 'merge_start':
+            _handleMergeStart(data);
+            break;
           default:
             if (kDebugMode) print('Unknown message type: ${data['type']}');
         }
@@ -288,46 +294,55 @@ class DownloadService {
     print('Client: Sending pause command for: $url');
     
     final item = _downloads[url];
-    if (item == null) {
-      print('No download found to pause: $url');
-      return;
-    }
-    
-    // Permitir pausar incluso si ya está en proceso de transición
-    if (item.tempStatus == 'resuming' || item.status == DownloadStatus.downloading) {
-      item.tempStatus = 'pausing';
-      item.addLog('⏸ Pausing download...');
-      item.currentSpeed = 0;
-      _downloadController.add(item);
-      
-      print('Sending pause command to server for: $url');
-      _sendCommandWithRetry('pause_download', url, 3);
-    } else {
-      print('Download not in a pausable state');
-    }
-  }
+    if (item == null) return;
 
-  void resumeDownload(String url) {
+    // Set temporary state immediately
+    if (item.status == DownloadStatus.downloading) {
+        item.tempStatus = 'pausing';
+        item.addLog('⏸ Pausing download...');
+        
+        // Store last known speed before pausing
+        _updateSpeedHistory(url, item.currentSpeed);
+        
+        _downloadController.add(item);
+        _sendCommandWithRetry('pause_download', url, 3);
+    }
+}
+
+void resumeDownload(String url) {
     print('Client: Sending resume command for: $url');
     
     final item = _downloads[url];
-    if (item == null) {
-      print('No download found to resume: $url');
-      return;
+    if (item == null) return;
+
+    // Set temporary state immediately
+    if (item.status == DownloadStatus.paused) {
+        item.tempStatus = 'resuming';
+        item.addLog('▶️ Resuming download...');
+        
+        // Use stored speed history for optimizing chunks
+        final avgSpeed = _getAverageSpeed(url);
+        if (avgSpeed > 0) {
+            _connector.send({
+                'type': 'resume_download',
+                'url': url,
+                'previous_speed': avgSpeed,
+            });
+        } else {
+            _sendCommandWithRetry('resume_download', url, 3);
+        }
+        
+        _downloadController.add(item);
     }
+}
+
+// Improve speed history tracking
+double _getAverageSpeed(String url) {
+    final history = _speedHistory[url];
+    if (history == null || history.isEmpty) return 0;
     
-    // Permitir reanudar incluso si está en proceso de transición
-    if (item.tempStatus == 'pausing' || item.status == DownloadStatus.paused) {
-      item.tempStatus = 'resuming';
-      item.addLog('▶️ Resuming download...');
-      _downloadController.add(item);
-      
-      print('Sending resume command to server for: $url');
-      _sendCommandWithRetry('resume_download', url, 3);
-    } else {
-      print('Download not in a resumable state');
-    }
-  }
+    return history.reduce((a, b) => a + b) / history.length;
+}
 
   void cancelDownload(String url) {
     print('Canceling download: $url');
@@ -369,56 +384,45 @@ class DownloadService {
     _connector.dispose();
   } 
 
-  void _handleProgressUpdate(Map<String, dynamic> data) async {
+  void _handleProgressUpdate(Map<String, dynamic> data) {
     final url = data['url'];
     if (_recentlyCancelled.contains(url)) return;
     
     final item = _downloads[url];
     if (item != null) {
-      try {
-        final newBytes = data['bytesReceived'] ?? 0;
-        final totalBytes = data['totalBytes'] ?? 0;
-        // Fix null status handling
-        final status = data['status']?.toString() ?? "downloading";
+        try {
+            final newBytes = data['bytesReceived'] ?? 0;
+            final totalBytes = data['totalBytes'] ?? 0;
+            final status = data['status']?.toString() ?? "downloading";
 
-        // Calculate actual progress
-        if (totalBytes > 0) {
-          // Use a slightly higher threshold to trigger 100%
-          final progress = (newBytes / totalBytes).clamp(0.0, 1.001);
-          
-          // Special handling for 100% state
-          if (progress >= 0.999) {
-            item.progress = 1.0;
-            item.downloadedBytes = totalBytes;
-            item.totalBytes = totalBytes;
-            
-            // Force 100% log if not already present
-            if (!item.logs.any((log) => log.contains('100.0%'))) {
-              item.addLog('📥 100.0%');
-            }
-          } else {
-            item.progress = progress;
+            // Update progress and bytes
             item.downloadedBytes = newBytes;
             item.totalBytes = totalBytes;
-          }
+            
+            // Force progress to exactly 1.0 for completion
+            if (status == "completed") {
+                item.progress = 1.0;
+            } else {
+                item.progress = (newBytes / totalBytes).clamp(0.0, 1.0);
+            }
+
+            _downloadController.add(item);
+        } catch (e) {
+            print('Error processing progress update: $e');
         }
-
-        // Update speed unless merging
-        if (status != "merging") {
-          final rawSpeed = data['speed'];
-          if (rawSpeed != null) {
-            double speed = rawSpeed is int ? rawSpeed.toDouble() : rawSpeed as double;
-            item.updateSpeed(speed);
-          }
-        }
-
-        _downloadController.add(item);
-
-      } catch (e) {
-        print('Error processing progress update: $e');
-      }
     }
-  }
+}
+
+void _handleDownloadCompletion(Map<String, dynamic> data) {
+    final url = data['url'];
+    if (_recentlyCancelled.contains(url)) return;
+    
+    final item = _downloads[url];
+    if (item != null && !item.logs.any((log) => log.contains('100.0%'))) {
+        item.addLog(data['message'] as String);
+        _downloadController.add(item);
+    }
+}
 
   Future<void> _handleCompleted(DownloadItem item) async {
     // Force 100% state first
@@ -439,6 +443,7 @@ class DownloadService {
   }
 
   void _requestChecksum(String url, String filename) {
+    // Solicitar al servidor que calcule el checksum
     // Solicitar al servidor que calcule el checksum
     _connector.send({
       'type': 'calculate_checksum',
@@ -470,66 +475,63 @@ class DownloadService {
 
   void _handleErrorMessage(Map<String, dynamic> data) {
     final url = data['url'] as String;
-    // Ignorar errores si la URL fue recientemente cancelada
+    // Ignore errors if URL was recently cancelled
     if (_recentlyCancelled.contains(url)) {
-      print('Ignoring error message for cancelled download: $url');
-      return;
+        print('Ignoring error message for cancelled download: $url');
+        return;
     }
     
     final errorMessage = data['message'] as String? ?? 'Unknown error';
     final item = _downloads[url];
     if (item == null) return;
     
-    // Añadir log detallado por tipo de error
+    // Add detailed error log
     if (errorMessage.contains('connection')) {
-      item.addLog('🌐 Connection error: $errorMessage');
+        item.addLog('🌐 Connection error: $errorMessage');
     } else if (errorMessage.contains('timeout')) {
-      item.addLog('⌛ Timeout error: $errorMessage');
+        item.addLog('⌛ Timeout error: $errorMessage');
     } else {
-      item.addLog('❌ Error: $errorMessage');
+        item.addLog('❌ Error: $errorMessage');
     }
     
-    // Retry más agresivo para errores de red
-    final retryCount = _retryCount[url] ?? 0;
-    if (retryCount < _maxRetries) {
-      _retryCount[url] = retryCount + 1;
-      final delay = Duration(seconds: retryCount + 1); // Delay más corto
-      item.addLog('🔄 Auto-retry ${retryCount + 1}/$_maxRetries in ${delay.inSeconds}s...');
-      item.status = DownloadStatus.paused;
-      _retryTimers[url]?.cancel();
-      _retryTimers[url] = Timer(delay, () {
-        if (_downloads.containsKey(url)) {
-          item.addLog('🔄 Resuming download...');
-          resumeDownload(url);
+    // Only retry if not paused
+    if (item.status != DownloadStatus.paused) {
+        final retryCount = _retryCount[url] ?? 0;
+        if (retryCount < _maxRetries) {
+            _retryCount[url] = retryCount + 1;
+            final delay = Duration(seconds: retryCount + 1);
+            item.addLog('🔄 Auto-retry ${retryCount + 1}/$_maxRetries in ${delay.inSeconds}s...');
+            _retryTimers[url]?.cancel();
+            _retryTimers[url] = Timer(delay, () {
+                if (_downloads.containsKey(url) && item.status != DownloadStatus.paused) {
+                    resumeDownload(url);
+                }
+            });
+        } else {
+            // Mark as error if max retries reached
+            item.status = DownloadStatus.error;
+            item.error = errorMessage;
+            item.addLog('💔 Download failed after $_maxRetries retries');
+            _downloadController.add(item);
         }
-      });
-    } else {
-      // Mantener la descarga pero marcarla como error
-      item.status = DownloadStatus.error;
-      item.error = errorMessage;
-      item.addLog('💔 Download failed after $_maxRetries retries');
-      // No remover la descarga para permitir retry manual
-      _downloadController.add(item);
     }
-  }
+}
 
-  void _handleLogMessage(Map<String, dynamic> data) {
+void _handleLogMessage(Map<String, dynamic> data) {
     final url = data['url'];
     if (_recentlyCancelled.contains(url)) return;
     
-    final message = data['message'];
+    final message = data['message'] as String;
+    final force = data['force'] as bool? ?? false;
     final item = _downloads[url];
     if (item == null) return;
 
-    // No procesar el mensaje si ya existe uno idéntico
-    if (item.logs.isNotEmpty && item.logs.last.contains(message)) {
-        return;
+    // Remove duplicate check for 100% message
+    if (force || message == "📥 100.0%" || !item.logs.any((log) => log.contains(message))) {
+        item.addLog(message);
+        _downloadController.add(item);
     }
-
-    // Agregar el mensaje normalmente
-    item.addLog(message);
-    _downloadController.add(item);
-  }
+}
 
   // Manejar confirmación de cancelación del servidor  
   void _handleCancelConfirmation(Map<String, dynamic> data) {
@@ -604,6 +606,7 @@ class DownloadService {
       // Update speed from chunks
       if (totalSpeed > 0) {
         item.updateSpeed(totalSpeed);
+        _updateSpeedHistory(url, totalSpeed);
       }
       
       _updateOverallProgress(item);
@@ -633,39 +636,49 @@ class DownloadService {
     double totalDownloaded = 0;
     double totalSize = 0;
     
-    // Primero calcular el tamaño total
+    // First calculate total size
     for (final chunk in item.chunks.values) {
-      double chunkSize = (chunk.end - chunk.start + 1).toDouble();
-      totalSize += chunkSize;
-      
-      // Validar que el progreso no exceda el tamaño del chunk
-      if (chunk.status == 'completed') {
-        totalDownloaded += chunkSize;
-      } else if (chunk.status == 'active' && chunk.progress > 0) {
-        double chunkProgress = chunk.progress.toDouble();
-        // Limitar el progreso al tamaño del chunk
-        chunkProgress = chunkProgress.clamp(0, chunkSize);
-        totalDownloaded += chunkProgress;
-      }
+        double chunkSize = (chunk.end - chunk.start + 1).toDouble();
+        totalSize += chunkSize;
+        
+        // Validate progress doesn't exceed chunk size
+        if (chunk.status == 'completed') {
+            totalDownloaded += chunkSize;
+        } else if (chunk.status == 'active' && chunk.progress > 0) {
+            // More aggressive completion check for last chunk
+            if (chunk.id == item.chunks.length - 1 && 
+                chunk.progress >= chunkSize - 256) {
+                totalDownloaded += chunkSize;
+            } else {
+                totalDownloaded += chunk.progress.toDouble();
+            }
+        }
     }
     
-    // Validar y actualizar valores finales
+    // Validate and update final values with tighter tolerance
     if (totalSize > 0) {
-      // Asegurar que totalDownloaded no exceda totalSize
-      totalDownloaded = totalDownloaded.clamp(0, totalSize);
-      
-      item.totalBytes = totalSize.toInt();
-      item.downloadedBytes = totalDownloaded.toInt();
-      item.progress = (totalDownloaded / totalSize).clamp(0, 1);
-      
-      // Solo mostrar log si hay cambio significativo y no excede 100%
-      if (item.progress <= 1.0) {
-        final progressPercent = (item.progress * 100).toStringAsFixed(1);
-        final lastLog = item.logs.isNotEmpty ? item.logs.last : "";
-        if (!lastLog.contains('📥 $progressPercent%')) {
-          item.addLog('📥 $progressPercent%');
+        // Ensure totalDownloaded doesn't exceed totalSize
+        totalDownloaded = totalDownloaded.clamp(0, totalSize);
+        
+        item.totalBytes = totalSize.toInt();
+        item.downloadedBytes = totalDownloaded.toInt();
+        
+        // Use exact progress calculation for >90%
+        if (totalDownloaded / totalSize > 0.9) {
+            item.progress = (totalDownloaded / totalSize).clamp(0, 1);
+        } else {
+            // Use rounded progress for earlier stages
+            item.progress = (totalDownloaded / totalSize * 1000).round() / 1000;
         }
-      }
+        
+        // Only show log for significant changes
+        if (item.progress <= 1.0) {
+            final progressPercent = (item.progress * 100).toStringAsFixed(1);
+            final lastLog = item.logs.isNotEmpty ? item.logs.last : "";
+            if (!lastLog.contains('📥 $progressPercent%')) {
+                item.addLog('📥 $progressPercent%');
+            }
+        }
     }
     
     // Ensure speed and ETA are properly updated
@@ -753,4 +766,68 @@ class DownloadService {
       print('Cannot update resumed state: download not found for $url');
     }
   }
+
+  // Add speed history
+  final Map<String, List<double>> _speedHistory = {};
+  
+  void _updateSpeedHistory(String url, double speed) {
+      if (!_speedHistory.containsKey(url)) {
+          _speedHistory[url] = [];
+      }
+      
+      final history = _speedHistory[url]!;
+      history.add(speed);
+      
+      // Keep last 10 speed samples
+      if (history.length > 10) {
+          history.removeAt(0);
+      }
+      
+      // Analyze speed trend and adjust chunk count
+      _optimizeChunks(url);
+  }
+  
+  void _optimizeChunks(String url) {
+      final history = _speedHistory[url];
+      if (history == null || history.length < 5) return;
+      
+      // Calculate average speed
+      final avgSpeed = history.reduce((a, b) => a + b) / history.length;
+      
+      // Send optimization command to server
+      _connector.send({
+          'type': 'optimize_chunks',
+          'url': url,
+          'speed': avgSpeed,
+      });
+  }
+
+  void _handleDownloadComplete(Map<String, dynamic> data) {
+    final url = data['url'];
+    if (_recentlyCancelled.contains(url)) return;
+    
+    final item = _downloads[url];
+    if (item != null) {
+        item.progress = 1.0;
+        // Only add 100% message if not already present
+        if (!item.logs.any((log) => log.contains('100.0%'))) {
+            item.addLog(data['message'] as String);
+        }
+        _downloadController.add(item);
+    }
+}
+
+void _handleMergeStart(Map<String, dynamic> data) {
+    final url = data['url'];
+    if (_recentlyCancelled.contains(url)) return;
+    
+    final item = _downloads[url];
+    if (item != null) {
+        // Only add merge message if not already merging
+        if (!item.logs.any((log) => log.contains('Merging chunks'))) {
+            item.addLog(data['message'] as String);
+        }
+        _downloadController.add(item);
+    }
+}
 }

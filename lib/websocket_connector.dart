@@ -153,12 +153,21 @@ class WebSocketConnector {
 
     if (_reconnectAttempts < _maxReconnectAttempts) {
       _reconnectAttempts++;
-      final delay = Duration(seconds: _reconnectAttempts * 2); // Backoff exponencial
-      print('Reconnecting in ${delay.inSeconds} seconds (attempt $_reconnectAttempts)');
+      // Usar backoff exponencial más agresivo
+      final delay = Duration(milliseconds: 500 * _reconnectAttempts);
+      print('Reconnecting in ${delay.inMilliseconds}ms (attempt $_reconnectAttempts)');
       _reconnectTimer?.cancel();
-      _reconnectTimer = Timer(delay, connect);
+      _reconnectTimer = Timer(delay, () {
+        connect().catchError((e) {
+          print('Reconnection attempt failed: $e');
+        });
+      });
     } else {
       print('Max reconnection attempts reached');
+      // Reset reconnect attempts after a longer delay
+      Timer(Duration(seconds: 5), () {
+        _reconnectAttempts = 0;
+      });
     }
   }
 

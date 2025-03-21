@@ -112,6 +112,13 @@ func (d *ChunkedDownload) PrepareChunks() error {
 
 // DownloadChunk descarga un chunk específico
 func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeConn *SafeConn) error {
+	// Reset chunk state at start
+	chunk.mu.Lock()
+	if chunk.Status != ChunkCompleted {
+		chunk.Status = ChunkActive
+	}
+	chunk.mu.Unlock()
+
 	// Añadir log de inicio de chunk
 	log.Printf("Starting chunk %d: bytes %d-%d", chunk.ID, chunk.Start, chunk.End)
 
@@ -203,14 +210,26 @@ func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeC
 	// Remover todas las redeclaraciones redundantes de estas variables
 	// y eliminar las líneas 197-208 que contienen las declaraciones duplicadas
 
+	// Modify the download loop to better handle pause/resume
 	for {
 		select {
 		case <-chunk.cancelCtx:
 			chunk.mu.Lock()
-			chunk.Status = ChunkPaused
+			if chunk.Status == ChunkActive {
+				chunk.Status = ChunkPaused
+			}
 			chunk.mu.Unlock()
 			return nil
 		default:
+			if d.Paused {
+				chunk.mu.Lock()
+				if chunk.Status == ChunkActive {
+					chunk.Status = ChunkPaused
+				}
+				chunk.mu.Unlock()
+				return nil
+			}
+
 			n, err := resp.Body.Read(buffer)
 			if n > 0 {
 				// Escribir al archivo
@@ -417,6 +436,7 @@ func (d *ChunkedDownload) GetProgress() (downloaded int64, total int64) {
 	total = d.Size
 	downloaded = 0
 	activeOrIncomplete := 0
+	completedChunks := 0
 
 	for _, chunk := range d.Chunks {
 		chunk.mu.Lock()
@@ -425,10 +445,12 @@ func (d *ChunkedDownload) GetProgress() (downloaded int64, total int64) {
 		switch chunk.Status {
 		case ChunkCompleted:
 			downloaded += chunkSize
+			completedChunks++
 		case ChunkActive:
-			// Si el progreso está muy cerca del final, considerar completo
-			if chunk.Progress >= chunkSize-512 { // Tolerancia de 512 bytes
+			// More aggressive completion threshold for last chunks
+			if chunk.Progress >= chunkSize-32 {
 				downloaded += chunkSize
+				chunk.Status = ChunkCompleted
 			} else {
 				downloaded += chunk.Progress
 				activeOrIncomplete++
@@ -439,10 +461,11 @@ func (d *ChunkedDownload) GetProgress() (downloaded int64, total int64) {
 		chunk.mu.Unlock()
 	}
 
-	// Si solo queda un margen muy pequeño y no hay chunks activos/pendientes
-	remainingBytes := total - downloaded
-	if activeOrIncomplete == 0 && remainingBytes < 1024 { // 1KB de tolerancia
-		downloaded = total
+	// If all chunks are nearly complete, consider download complete
+	if completedChunks == len(d.Chunks)-1 && activeOrIncomplete == 1 {
+		if total-downloaded <= 32 {
+			downloaded = total
+		}
 	}
 
 	return
@@ -453,15 +476,21 @@ func (d *ChunkedDownload) IsComplete() bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
+	downloaded := int64(0)
 	for _, chunk := range d.Chunks {
 		chunk.mu.Lock()
-		if chunk.Status != ChunkCompleted {
-			chunk.mu.Unlock()
-			return false
+		if chunk.Status == ChunkCompleted {
+			downloaded += (chunk.End - chunk.Start + 1)
+		} else if chunk.Status == ChunkActive {
+			remaining := chunk.End - chunk.Start + 1 - chunk.Progress
+			if remaining <= 32 {
+				downloaded += (chunk.End - chunk.Start + 1)
+			}
 		}
 		chunk.mu.Unlock()
 	}
-	return true
+
+	return downloaded >= d.Size-32
 }
 
 // Cleanup elimina archivos temporales
@@ -476,12 +505,12 @@ func (c *Chunk) markCompleted() {
 
 	expectedSize := c.End - c.Start + 1
 
-	// Usar una tolerancia para considerar el chunk como completo
-	if c.Progress >= expectedSize-512 { // 512 bytes de tolerancia
+	// Use tighter tolerance for completion
+	if c.Progress >= expectedSize-32 {
 		c.Status = ChunkCompleted
-		c.Progress = expectedSize // Asegurar valor exacto
+		c.Progress = expectedSize // Force exact size
 	} else {
-		c.Status = ChunkFailed
-		c.Error = fmt.Sprintf("incomplete chunk data: %d/%d bytes", c.Progress, expectedSize)
+		c.Status = ChunkPending
+		c.Error = fmt.Sprintf("incomplete data: %d/%d", c.Progress, expectedSize)
 	}
 }
