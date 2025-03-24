@@ -144,52 +144,61 @@ class DownloadItem {
     final seconds = timestamp.second.toString().padLeft(2, '0');
     final time = '$hours:$minutes:$seconds';
 
-    // Evitar duplicados consecutivos
-    if (logs.isNotEmpty) {
-      final lastLog = logs.last;
-      final lastMsgStart = lastLog.indexOf(']') + 2;
-      if (lastMsgStart > 0 && lastMsgStart < lastLog.length) {
-        final lastMsg = lastLog.substring(lastMsgStart);
+    // Debug output to help identify duplicates
+    //print("Adding log: $message");
+    //print("Current logs: ${logs.length}");
 
-        // Si el mensaje es idéntico al último, no lo añadir
-        if (lastMsg == message) {
+    // Strict duplicate prevention: Check if exact message already exists
+    for (final log in logs) {
+      final logMessage = log.substring(log.indexOf(']') + 2);
+      if (logMessage == message) {
+        //print("Skipping duplicate: $message");
+        return;
+      }
+    }
+
+    // Special handling for percentages to avoid weird jumps
+    if (message.startsWith('📥 ')) {
+      final percentRegex = RegExp(r'(\d+\.\d+)%');
+      final match = percentRegex.firstMatch(message);
+
+      if (match != null) {
+        final percent = double.tryParse(match.group(1) ?? '0');
+
+        // For 99.9% - only add if we don't already have it
+        if (percent == 99.9 && logs.any((log) => log.contains("99.9%"))) {
           return;
         }
 
-        // Manejar incrementos de progreso
-        if (message.startsWith('📥 ') && lastMsg.startsWith('📥 ')) {
-          final percentRegex = RegExp(r'(\d+\.\d+)%');
-          final lastMatch = percentRegex.firstMatch(lastMsg);
-          final currentMatch = percentRegex.firstMatch(message);
-
-          if (lastMatch != null && currentMatch != null) {
-            final lastPercent = double.tryParse(lastMatch.group(1) ?? '0');
-            final currentPercent = double.tryParse(
-              currentMatch.group(1) ?? '0',
-            );
-
-            if (lastPercent != null && currentPercent != null) {
-              // Solo permitir incrementos de 0.1%
-              final difference = currentPercent - lastPercent;
-              if (difference < 0.1) {
-                return; // Ignorar cambios menores a 0.1%
-              }
-
-              // Asegurar incrementos consecutivos
-              final expectedPercent = (lastPercent * 10).round() / 10 + 0.1;
-              if (currentPercent > expectedPercent) {
-                // Generar incrementos intermedios
-                var nextPercent = expectedPercent;
-                while (nextPercent < currentPercent) {
-                  logs.add('[$time] 📥 ${nextPercent.toStringAsFixed(1)}%');
-                  nextPercent += 0.1;
-                }
-                return; // El porcentaje actual se añadirá en la siguiente actualización
-              }
-            }
-          }
+        // For 100% - only add if we don't already have it
+        if (percent == 100.0 && logs.any((log) => log.contains("100.0%"))) {
+          return;
         }
       }
+    }
+
+    // Prevent multiple "Merging chunks" messages
+    if (message.contains("Merging chunks") &&
+        logs.any((log) => log.contains("Merging chunks"))) {
+      return;
+    }
+
+    // Prevent multiple "completed successfully" messages
+    if (message.contains("completed successfully") &&
+        logs.any((log) => log.contains("completed successfully"))) {
+      return;
+    }
+
+    // Prevent multiple checksum calculation messages
+    if (message.startsWith('🔐') &&
+        logs.any((log) => log.contains("Starting SHA-256"))) {
+      return;
+    }
+
+    // Prevent multiple checksum result messages
+    if (message.startsWith('🔑') &&
+        logs.any((log) => log.contains("SHA-256 checksum:"))) {
+      return;
     }
 
     // Limitar el tamaño de los logs

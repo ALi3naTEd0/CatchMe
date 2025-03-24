@@ -408,15 +408,15 @@ class DownloadService {
         item.totalBytes = totalBytes;
 
         // Calculate precise progress
-        item.progress =
-            totalBytes > 0 ? (newBytes / totalBytes).clamp(0.0, 1.0) : 0.0;
-
-        // Force exactly 1.0 for completed status
-        if (status == "completed") {
-          item.progress = 1.0;
-          // Ensure 100% message is shown
-          if (!item.logs.any((log) => log.contains('100.0%'))) {
-            item.addLog('📥 100.0%');
+        if (totalBytes > 0) {
+          // Special case handling to ensure smooth transition to 100%
+          if (status == "completed") {
+            item.progress = 1.0;
+          } else if (newBytes >= totalBytes - 1) {
+            // If we're at the last byte but not marked completed, cap at 99.9%
+            item.progress = 0.999;
+          } else {
+            item.progress = (newBytes / totalBytes).clamp(0.0, 0.999);
           }
         }
 
@@ -438,7 +438,7 @@ class DownloadService {
     item.checksum = checksum;
     final seconds = duration / 1000.0;
 
-    // Ensure this log message is only added once
+    // Only add checksum log if we don't already have it
     if (!item.logs.any((log) => log.contains(checksum))) {
       item.addLog(
         '🔑 SHA-256 checksum: $checksum (calculated in ${seconds.toStringAsFixed(1)}s)',
@@ -503,59 +503,44 @@ class DownloadService {
     if (_recentlyCancelled.contains(url)) return;
 
     final message = data['message'] as String;
-    final force = data['force'] as bool? ?? false;
+    // Remove unused variable 'force'
     final item = _downloads[url];
     if (item == null) return;
 
-    // Add ALL initial information (file size, chunks, etc.) directly
-    if (message.contains("File size:") ||
-        message.contains("Split into") ||
-        message.contains("Downloading file:") ||
-        message.contains("range requests")) {
+    // Special case for important progress updates to ensure proper sequence
+    if (message == "📥 99.9%") {
+      _logger.info('Received 99.9% progress update for $url');
+      item.addLog(message);
+      item.progress = 0.999; // Ensure progress bar shows proper value
+      _downloadController.add(item);
+      return;
+    }
+
+    if (message == "📥 100.0%") {
+      _logger.info('Received 100.0% progress update for $url');
+      item.addLog(message);
+      item.progress = 1.0; // Force to exactly 1.0
+      _downloadController.add(item);
+      return;
+    }
+
+    if (message.startsWith('🔄 Merging chunks')) {
+      _logger.info('Merging chunks for $url');
       item.addLog(message);
       _downloadController.add(item);
       return;
     }
 
-    // Special handling for progress percentage messages
-    if (message.contains('%')) {
-      // Always add 0.0% directly
-      if (message == "📥 0.0%") {
-        item.addLog(message);
-      }
-      // Always add 99.9% directly
-      else if (message == "📥 99.9%") {
-        item.addLog(message);
-      }
-      // Add 100% only if we've seen 99.9% or if forced
-      else if (message == "📥 100.0%" &&
-          (item.logs.any((log) => log.contains("99.9%")) || force)) {
-        item.addLog(message);
-      }
-    }
-    // Add "Merging chunks" only if we've seen "100.0%"
-    else if (message.startsWith('🔄 Merging chunks')) {
-      if (item.logs.any((log) => log.contains("100.0%"))) {
-        item.addLog(message);
-      }
-    }
-    // Add "Download completed" only if we've seen "Merging chunks"
-    else if (message == "✅ Download completed successfully") {
-      if (item.logs.any((log) => log.contains("Merging chunks"))) {
-        item.addLog(message);
-      }
-    }
-    // Add checksum messages only if we've seen "completed successfully"
-    else if (message.startsWith('🔐')) {
-      if (item.logs.any((log) => log.contains("completed successfully"))) {
-        item.addLog(message);
-      }
-    }
-    // Add all other log messages directly
-    else {
+    if (message == "✅ Download completed successfully") {
+      _logger.info('Download completed for $url');
       item.addLog(message);
+      item.status = DownloadStatus.completed;
+      _downloadController.add(item);
+      return;
     }
 
+    // Handle all other messages normally
+    item.addLog(message);
     _downloadController.add(item);
   }
 

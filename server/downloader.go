@@ -296,7 +296,7 @@ func startChunkedDownload(safeConn *SafeConn, url string) {
 				return
 			}
 
-			// STRICTLY ORDERED SEQUENCE:
+			// STRICTLY ORDERED SEQUENCE with more verbose logging:
 			// 1. First check all chunks are really complete
 			for _, chunk := range download.Chunks {
 				chunk.mu.Lock()
@@ -311,20 +311,39 @@ func startChunkedDownload(safeConn *SafeConn, url string) {
 				chunk.mu.Unlock()
 			}
 
-			// 2. Send 99.9% progress
+			log.Printf("All chunks verified complete for %s, starting completion sequence", url)
+
+			// 2. Send 99.9% progress with explicit log message to debug
 			sendProgress(safeConn, url, download.Size-1, download.Size, 0, "downloading")
+			log.Printf("Sent 99.9%% progress for %s", url)
 			sendMessage(safeConn, "log", url, "📥 99.9%")
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(500 * time.Millisecond) // Longer delay for UI to catch up
 
-			// 3. Then 100% progress
+			// 3. Then 100% progress with explicit log message
 			sendProgress(safeConn, url, download.Size, download.Size, 0, "completed")
+			log.Printf("Sent 100.0%% progress for %s", url)
 			sendMessage(safeConn, "log", url, "📥 100.0%")
+			time.Sleep(500 * time.Millisecond)
+
+			// 4. Send download complete notification to trigger UI updates
+			safeConn.SendJSON(map[string]interface{}{
+				"type": "download_complete",
+				"url":  url,
+			})
 			time.Sleep(300 * time.Millisecond)
 
-			// 4. Then merging message
+			// 5. Then merging message
+			log.Printf("Starting merge for %s", url)
 			sendMessage(safeConn, "log", url, "🔄 Merging chunks...")
 
-			// 5. Perform actual merge with retry
+			// Send merge_start notification to ensure client sees it
+			safeConn.SendJSON(map[string]interface{}{
+				"type": "merge_start",
+				"url":  url,
+			})
+			time.Sleep(300 * time.Millisecond)
+
+			// 6. Perform actual merge with retry
 			var mergeErr error
 			for attempt := 0; attempt < 3; attempt++ {
 				if attempt > 0 {
@@ -348,14 +367,16 @@ func startChunkedDownload(safeConn *SafeConn, url string) {
 
 			time.Sleep(300 * time.Millisecond)
 
-			// 6. Download completed message
+			// 7. Download completed message with explicit log
+			log.Printf("Download completed successfully: %s", url)
 			sendMessage(safeConn, "log", url, "✅ Download completed successfully")
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(500 * time.Millisecond)
 
-			// 7. Calculate checksum (just once)
+			// 8. Calculate checksum (just once) with explicit log
+			log.Printf("Starting checksum calculation for %s", url)
 			handleCalculateChecksum(safeConn, url, filename)
 
-			// 8. Cleanup temporary files in background to avoid blocking
+			// 9. Cleanup temporary files in background to avoid blocking
 			go func() {
 				if err := download.Cleanup(); err != nil {
 					log.Printf("Warning: Failed to clean temporary files: %v", err)
