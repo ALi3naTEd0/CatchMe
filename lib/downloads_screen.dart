@@ -1,27 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // Para Clipboard
+import 'package:logging/logging.dart';
 import 'dart:async'; // Para Timer
 import 'dart:io';
-import 'package:path_provider/path_provider.dart';
 import 'download_item.dart';
 import 'download_service.dart';
 
+// Change GlobalKey type to be public
+final GlobalKey<DownloadsScreenState> downloadsKey =
+    GlobalKey<DownloadsScreenState>();
+
 class DownloadsScreen extends StatefulWidget {
+  // Make key nullable and use a const constructor
   const DownloadsScreen({super.key});
 
   @override
-  State<DownloadsScreen> createState() => _DownloadsScreenState();
+  State<DownloadsScreen> createState() => DownloadsScreenState();
 }
 
-class _DownloadsScreenState extends State<DownloadsScreen> {
+// Rename to public name and keep same functionality
+class DownloadsScreenState extends State<DownloadsScreen> {
   final _downloadService = DownloadService();
   final _urlController = TextEditingController();
+  final _logger = Logger('DownloadsScreen');
   bool _serviceInitialized = false;
   Timer? _clipboardCheckTimer;
-  
+
   // Mapa para mantener un ScrollController por cada URL
   final Map<String, ScrollController> _scrollControllers = {};
-  
+
   // Set para rastrear URLs ya procesadas
   final Set<String> _clipboardProcessedUrls = {};
 
@@ -58,12 +65,14 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       if (data != null && data.text != null) {
         final text = data.text!;
         if (_isValidUrl(text) && !_clipboardProcessedUrls.contains(text)) {
-          _clipboardProcessedUrls.add(text); // Evitar procesar la misma URL múltiples veces
+          _clipboardProcessedUrls.add(
+            text,
+          ); // Evitar procesar la misma URL múltiples veces
           _showClipboardUrlNotification(text);
         }
       }
     } catch (e) {
-      print('Error checking clipboard: $e');
+      _logger.warning('Error checking clipboard: $e');
     }
   }
 
@@ -75,7 +84,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   // Mostrar notificación para URL detectada
   void _showClipboardUrlNotification(String url) {
     if (!mounted) return;
-    
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _urlController.text = url;
       _showAddDownloadDialog(context);
@@ -85,62 +94,67 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   void _showAddDownloadDialog(BuildContext context) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('New Download'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _urlController,
-              decoration: const InputDecoration(
-                labelText: 'URL',
-                hintText: 'https://example.com/file.zip',
-                border: OutlineInputBorder(),
-              ),
-              autofocus: true,
-              onSubmitted: (url) {
-                Navigator.of(context).pop();
-                _startDownload(context, url, true); // Siempre usar chunks por defecto
-              },
+      builder:
+          (context) => AlertDialog(
+            title: const Text('New Download'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: _urlController,
+                  decoration: const InputDecoration(
+                    labelText: 'URL',
+                    hintText: 'https://example.com/file.zip',
+                    border: OutlineInputBorder(),
+                  ),
+                  autofocus: true,
+                  onSubmitted: (url) {
+                    Navigator.of(context).pop();
+                    _startDownload(
+                      url,
+                      true,
+                    ); // Siempre usar chunks por defecto
+                  },
+                ),
+              ],
             ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final url = _urlController.text;
+                  if (url.isNotEmpty) {
+                    Navigator.of(context).pop();
+                    _startDownload(
+                      url,
+                      true,
+                    ); // Siempre usar chunks por defecto
+                  }
+                },
+                child: const Text('Download'),
+              ),
+            ],
           ),
-          FilledButton(
-            onPressed: () {
-              final url = _urlController.text;
-              if (url.isNotEmpty) {
-                Navigator.of(context).pop();
-                _startDownload(context, url, true); // Siempre usar chunks por defecto
-              }
-            },
-            child: const Text('Download'),
-          ),
-        ],
-      ),
     );
   }
 
-  void _startDownload(BuildContext context, String url, [bool useChunks = true]) {
-    print('Attempting to start download: $url (Chunks: $useChunks)');
+  void _startDownload(String url, [bool useChunks = true]) {
+    _logger.info('Attempting to start download: $url (Chunks: $useChunks)');
     try {
-      _downloadService.startDownload(url, useChunks: useChunks).catchError((error) {
-        // Mostrar error en SnackBar para mejorar UX
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${error.toString()}')),
-        );
+      _downloadService.startDownload(url, useChunks: useChunks).catchError((
+        error,
+      ) {
+        // Use the global key to show messages
+        downloadsKey.currentState?.showMessage('Error: ${error.toString()}');
       });
     } catch (e) {
-      print('Error starting download: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
-      );
+      _logger.severe('Error starting download: $e');
+      downloadsKey.currentState?.showMessage('Error: $e');
     }
-    
+
     // Limpiar campo después de iniciar descarga
     _urlController.clear();
   }
@@ -148,7 +162,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   @override
   void dispose() {
     _clipboardCheckTimer?.cancel();
-    
+
     // Limpiar todos los ScrollControllers
     for (final controller in _scrollControllers.values) {
       controller.dispose();
@@ -163,7 +177,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     if (!_scrollControllers.containsKey(url)) {
       _scrollControllers[url] = ScrollController();
     }
-    
+
     // Programar un scroll al final después de la construcción
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollControllers[url]!.hasClients) {
@@ -174,7 +188,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         );
       }
     });
-    
+
     return _scrollControllers[url]!;
   }
 
@@ -195,57 +209,60 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
           ),
         ],
       ),
-      body: !_serviceInitialized 
-        ? const Center(
-            child: CircularProgressIndicator(),
-          )
-        : StreamBuilder<DownloadItem>(
-          stream: _downloadService.downloadStream,
-          builder: (context, snapshot) {
-            // Importante: No usar Key única con DateTime pues fuerza reconstrucción
-            // causando lag y problemas de rendimiento
-            
-            // Imprimir información para depuración
-            if (snapshot.hasData) {
-              final download = snapshot.data!;
-              print('UI received update: ${download.filename} - ${download.formattedProgress}');
-            }
-            
-            return ListView.builder(
-              itemCount: _downloadService.downloads.length,
-              padding: const EdgeInsets.all(16),
-              itemBuilder: (context, index) {
-                final download = _downloadService.downloads[index];
-                return _buildDownloadCard(download);
-              },
-            );
-          },
-        ),
+      body:
+          !_serviceInitialized
+              ? const Center(child: CircularProgressIndicator())
+              : StreamBuilder<DownloadItem>(
+                stream: _downloadService.downloadStream,
+                builder: (context, snapshot) {
+                  // Importante: No usar Key única con DateTime pues fuerza reconstrucción
+                  // causando lag y problemas de rendimiento
+
+                  // Imprimir información para depuración
+                  if (snapshot.hasData) {
+                    final download = snapshot.data!;
+                    _logger.info(
+                      'UI received update: ${download.filename} - ${download.formattedProgress}',
+                    );
+                  }
+
+                  return ListView.builder(
+                    itemCount: _downloadService.downloads.length,
+                    padding: const EdgeInsets.all(16),
+                    itemBuilder: (context, index) {
+                      final download = _downloadService.downloads[index];
+                      return _buildDownloadCard(download);
+                    },
+                  );
+                },
+              ),
     );
   }
 
   Widget _buildDownloadCard(DownloadItem download) {
     final accent = Colors.blue[300] ?? Colors.blue;
-    
+
     // Add action icon and button logic
-    final actionIcon = download.status == DownloadStatus.downloading 
-        ? Icons.pause
-        : download.status == DownloadStatus.paused 
-            ? Icons.play_arrow 
+    final actionIcon =
+        download.status == DownloadStatus.downloading
+            ? Icons.pause
+            : download.status == DownloadStatus.paused
+            ? Icons.play_arrow
             : Icons.folder_open;
-            
-    final enableButton = download.status == DownloadStatus.downloading ||
-                        download.status == DownloadStatus.paused ||
-                        download.status == DownloadStatus.completed;
+
+    final enableButton =
+        download.status == DownloadStatus.downloading ||
+        download.status == DownloadStatus.paused ||
+        download.status == DownloadStatus.completed;
 
     // Clean up layout variables
     final screenWidth = MediaQuery.of(context).size.width;
     final isMobile = screenWidth < 800;
-    
+
     // Get current states
     bool expandLog = download.expandLog ?? false;
     bool expandChunks = download.expandChunks ?? false;
-    
+
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: Column(
@@ -269,7 +286,10 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                           Expanded(
                             child: Text(
                               download.url,
-                              style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey[400],
+                              ),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -278,9 +298,12 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                             Text(
                               download.statusDisplay,
                               style: TextStyle(
-                                fontSize: 12, 
-                                color: download.tempStatus == 'pausing' ? Colors.orange : Colors.green,
-                                fontWeight: FontWeight.bold
+                                fontSize: 12,
+                                color:
+                                    download.tempStatus == 'pausing'
+                                        ? Colors.orange
+                                        : Colors.green,
+                                fontWeight: FontWeight.bold,
                               ),
                             ),
                         ],
@@ -296,16 +319,18 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                 else
                   IconButton(
                     icon: Icon(actionIcon, color: accent),
-                    onPressed: enableButton ? () => _toggleDownload(download) : null,
+                    onPressed:
+                        enableButton ? () => _toggleDownload(download) : null,
                   ),
                 IconButton(
                   icon: Icon(Icons.close, color: Colors.red[300]),
-                  onPressed: () => _downloadService.cancelDownload(download.url),
+                  onPressed:
+                      () => _downloadService.cancelDownload(download.url),
                 ),
               ],
             ),
           ),
-          
+
           // Progress section with speed stats
           Container(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -330,16 +355,19 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                
+
                 // Progress bar
                 LinearProgressIndicator(
-                  value: download.progress.clamp(0.0, 1.0), // Ensure progress is clamped
+                  value: download.progress.clamp(
+                    0.0,
+                    1.0,
+                  ), // Ensure progress is clamped
                   backgroundColor: Colors.grey[800],
                   valueColor: AlwaysStoppedAnimation<Color>(accent),
                   minHeight: 6,
                 ),
                 const SizedBox(height: 12),
-                
+
                 // Stats según layout
                 if (isMobile)
                   Column(
@@ -459,7 +487,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                       ),
                     ],
                   ),
-                              
+
                 // Mini log y chunks section
                 Container(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -468,7 +496,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                       // Solo mostrar Log y Chunks, quitar sección de SHA-256
                       if (download.logs.isNotEmpty)
                         _buildLogSection(download, expandLog, accent),
-                      
+
                       if (download.chunks.isNotEmpty)
                         _buildChunksSection(download, expandChunks, accent),
                     ],
@@ -488,7 +516,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
-          Container(
+          SizedBox(
             width: 24,
             child: Text('#${chunk.id + 1}', style: TextStyle(fontSize: 10)),
           ),
@@ -496,15 +524,14 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
             child: LinearProgressIndicator(
               value: chunk.progressPercentage,
               backgroundColor: Colors.grey[800],
-              valueColor: AlwaysStoppedAnimation<Color>(_getChunkColor(chunk.status, accent)),
+              valueColor: AlwaysStoppedAnimation<Color>(
+                _getChunkColor(chunk.status, accent),
+              ),
               minHeight: 8,
             ),
           ),
           SizedBox(width: 8),
-          Text(
-            _getChunkStatusText(chunk),
-            style: TextStyle(fontSize: 10),
-          ),
+          Text(_getChunkStatusText(chunk), style: TextStyle(fontSize: 10)),
         ],
       ),
     );
@@ -547,7 +574,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
 
   String _formatSpeed(double bytesPerSecond) {
     if (bytesPerSecond <= 0) return '0 B/s';
-    
+
     const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
     int unitIndex = 0;
     double value = bytesPerSecond;
@@ -571,18 +598,9 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       children: [
         Icon(icon, size: iconSize, color: color),
         SizedBox(width: iconSize * 0.25),
-        Text(
-          label,
-          style: TextStyle(
-            color: color,
-            fontSize: fontSize,
-          ),
-        ),
+        Text(label, style: TextStyle(color: color, fontSize: fontSize)),
         SizedBox(width: iconSize * 0.25),
-        Text(
-          value,
-          style: TextStyle(fontSize: fontSize),
-        ),
+        Text(value, style: TextStyle(fontSize: fontSize)),
       ],
     );
   }
@@ -592,22 +610,28 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       // Usar la ruta ~/Downloads directamente, no la ruta de documentos
       final home = Platform.environment['HOME']!;
       final downloadsPath = '$home/Downloads';
-      print('Opening downloads folder: $downloadsPath');
-      
+      _logger.info('Opening downloads folder: $downloadsPath');
+
       if (Platform.isLinux) {
         final result = await Process.run('xdg-open', [downloadsPath]);
+        if (!mounted) return; // Early return if widget is disposed
         if (result.exitCode != 0) {
           throw Exception('Failed to open Downloads folder');
         }
       } else if (Platform.isWindows) {
-        await Process.run('explorer.exe', [downloadsPath.replaceAll('/', '\\')]);
+        await Process.run('explorer.exe', [
+          downloadsPath.replaceAll('/', '\\'),
+        ]);
+        if (!mounted) return; // Check after each async operation
       } else if (Platform.isMacOS) {
         await Process.run('open', [downloadsPath]);
+        if (!mounted) return; // Check after each async operation
       }
     } catch (e) {
-      print('Error opening folder: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open Downloads folder: $e')),
+      _logger.severe('Error opening folder: $e');
+      // Use the global key to show messages safely
+      downloadsKey.currentState?.showMessage(
+        'Could not open Downloads folder: $e',
       );
     }
   }
@@ -615,28 +639,33 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   void _toggleDownload(DownloadItem download) {
     // Verificar si la descarga ya está en proceso de pausa/resumen
     if (download.isInTransition) {
-      print('Download already in transition state: ${download.tempStatus}');
+      _logger.info(
+        'Download already in transition state: ${download.tempStatus}',
+      );
       return;
     }
-    
+
     if (download.status == DownloadStatus.completed) {
       _openFileLocation(download);
       return;
     }
-    
+
     if (download.status == DownloadStatus.downloading) {
-      print('UI: Pausing download: ${download.url}');
+      _logger.info('UI: Pausing download: ${download.url}');
       _downloadService.pauseDownload(download.url);
     } else if (download.status == DownloadStatus.paused) {
-      print('UI: Resuming download: ${download.url}');
+      _logger.info('UI: Resuming download: ${download.url}');
       _downloadService.resumeDownload(download.url);
     } else {
-      print('Download in non-toggleable state: ${download.status}');
+      _logger.warning('Download in non-toggleable state: ${download.status}');
     }
   }
 
   // Métodos auxiliares para la UI de chunks
-  List<Widget> _buildExpandedChunksContent(DownloadItem download, Color accent) {
+  List<Widget> _buildExpandedChunksContent(
+    DownloadItem download,
+    Color accent,
+  ) {
     final sections = [
       ('active', 'Active Chunks', accent),
       ('paused', 'Paused Chunks', Colors.orange),
@@ -644,35 +673,24 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       ('completed', 'Completed Chunks', Colors.green),
       ('failed', 'Failed Chunks', Colors.red),
     ];
-    
+
     List<Widget> widgets = [];
-    
+
     for (final (status, title, color) in sections) {
-      final chunks = download.chunks.values.where((c) => c.status == status).toList();
+      final chunks =
+          download.chunks.values.where((c) => c.status == status).toList();
       if (chunks.isNotEmpty) {
         widgets.add(
           Padding(
             padding: const EdgeInsets.only(top: 8, bottom: 4),
             child: Text(title, style: TextStyle(fontSize: 12, color: color)),
-          )
+          ),
         );
         widgets.addAll(chunks.map((c) => _buildChunkProgressItem(c, accent)));
       }
     }
-    
-    return widgets;
-  }
 
-  // Agregar método _formatBytes que faltaba
-  String _formatBytes(double bytes) {
-    if (bytes <= 0) return '0 B';
-    const suffixes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    var i = 0;
-    while (bytes >= 1024 && i < suffixes.length - 1) {
-      bytes /= 1024;
-      i++;
-    }
-    return '${bytes.toStringAsFixed(1)} ${suffixes[i]}';
+    return widgets;
   }
 
   Widget _buildLogSection(DownloadItem download, bool expandLog, Color accent) {
@@ -683,7 +701,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       decoration: BoxDecoration(
         color: Colors.grey[900],
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: accent.withOpacity(0.2)),
+        border: Border.all(color: accent.withAlpha((0.2 * 255).round())),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -704,14 +722,16 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                   Icon(
-                    expandLog ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                    expandLog
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
                     color: accent,
                   ),
                 ],
               ),
             ),
           ),
-          
+
           // Usar un RepaintBoundary para aislar las actualizaciones del log
           RepaintBoundary(
             child: AnimatedContainer(
@@ -753,14 +773,18 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     );
   }
 
-  Widget _buildChunksSection(DownloadItem download, bool expandChunks, Color accent) {
+  Widget _buildChunksSection(
+    DownloadItem download,
+    bool expandChunks,
+    Color accent,
+  ) {
     return AnimatedContainer(
       duration: Duration(milliseconds: 200),
       margin: const EdgeInsets.only(top: 16),
       decoration: BoxDecoration(
         color: Colors.grey[900],
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: accent.withOpacity(0.2)),
+        border: Border.all(color: accent.withAlpha((0.2 * 255).round())),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -787,7 +811,9 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                         style: TextStyle(fontSize: 12, color: Colors.grey[400]),
                       ),
                       Icon(
-                        expandChunks ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                        expandChunks
+                            ? Icons.keyboard_arrow_up
+                            : Icons.keyboard_arrow_down,
                         color: accent,
                       ),
                     ],
@@ -796,21 +822,29 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               ),
             ),
           ),
-          
+
           AnimatedContainer(
             duration: Duration(milliseconds: 200),
             height: expandChunks ? null : 0,
-            child: expandChunks 
-              ? Padding(
-                  padding: EdgeInsets.all(8),
-                  child: Column(
-                    children: _buildExpandedChunksContent(download, accent),
-                  ),
-                )
-              : const SizedBox.shrink(),
+            child:
+                expandChunks
+                    ? Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Column(
+                        children: _buildExpandedChunksContent(download, accent),
+                      ),
+                    )
+                    : const SizedBox.shrink(),
           ),
         ],
       ),
     );
+  }
+
+  // Add method to show messages from anywhere
+  void showMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 }

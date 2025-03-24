@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -40,6 +41,13 @@ const (
 	// Auto-tune chunk size based on connection speed
 	SpeedThresholdFast   int64 = 10 * 1024 * 1024 // 10MB/s
 	SpeedThresholdMedium int64 = 5 * 1024 * 1024  // 5MB/s
+
+	// Retry settings
+	MaxChunkRetries      = 5  // Maximum retries per chunk
+	InitialRetryDelay    = 1  // Initial retry delay in seconds
+	MaxRetryDelay        = 15 // Maximum retry delay in seconds
+	DownloadTimeout      = 30 // Timeout for individual chunk operations in seconds
+	StuckProgressTimeout = 60 // Consider a chunk stuck if no progress for this many seconds
 )
 
 // Speed tracking
@@ -186,15 +194,16 @@ func startChunkedDownload(safeConn *SafeConn, url string) {
 		}
 	}()
 
-	// Reportar estado inicial
-	download.mu.RLock()
-	// Enviar un progreso inicial de 0%
-	sendProgress(safeConn, url, 0, contentLength, 0, "starting")
-
-	// Un pequeño delay para permitir que la UI actualice
+	// Ensure all initial messages are sent with delays
 	time.Sleep(100 * time.Millisecond)
 
-	// Luego reportar los chunks
+	// Reportar estado inicial
+	sendProgress(safeConn, url, 0, contentLength, 0, "starting")
+	sendMessage(safeConn, "log", url, "📥 0.0%")
+	time.Sleep(300 * time.Millisecond) // Longer delay for UI to reflect starting state
+
+	// Luego reportar los chunks en un bloque de RLock
+	download.mu.RLock()
 	for _, chunk := range download.Chunks {
 		safeConn.SendJSON(map[string]interface{}{
 			"type": "chunk_init",
@@ -206,13 +215,13 @@ func startChunkedDownload(safeConn *SafeConn, url string) {
 				Status: chunk.Status,
 			},
 		})
-		// Pequeño delay entre chunks para no saturar
+		// Shorter delay between chunks
 		time.Sleep(5 * time.Millisecond)
 	}
 	download.mu.RUnlock()
 
-	// Otro pequeño delay antes de comenzar la descarga real
-	time.Sleep(100 * time.Millisecond)
+	// One final delay before starting download
+	time.Sleep(200 * time.Millisecond)
 
 	// Iniciar proceso de descarga en background
 	go func() {
@@ -271,44 +280,103 @@ func startChunkedDownload(safeConn *SafeConn, url string) {
 			return
 		}
 
-		// Verificar si todos los chunks están completos
-		if !download.IsComplete() {
-			sendMessage(safeConn, "error", url, "Download incomplete")
-			return
-		}
+		// SIMPLIFIED COMPLETION SEQUENCE with more robust error handling
+		if download.IsComplete() {
+			// Get destination path
+			home, err := os.UserHomeDir()
+			if err != nil {
+				sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to get home directory: %v", err))
+				return
+			}
+			downloadDir := filepath.Join(home, "Downloads")
+			destPath := filepath.Join(downloadDir, filename)
 
-		// 1. Primero enviar progreso 100%
-		sendProgress(safeConn, url, download.Size, download.Size, 0, "completed")
-		sendMessage(safeConn, "log", url, "📥 100.0%")
+			if err := os.MkdirAll(downloadDir, 0755); err != nil {
+				sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to create download directory: %v", err))
+				return
+			}
 
-		// 2. Obtener ruta y crear directorio
-		home, err := os.UserHomeDir()
-		if err != nil {
-			sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to get home directory: %v", err))
-			return
-		}
-		downloadDir := filepath.Join(home, "Downloads")
-		destPath := filepath.Join(downloadDir, filename)
+			// STRICTLY ORDERED SEQUENCE:
+			// 1. First check all chunks are really complete
+			for _, chunk := range download.Chunks {
+				chunk.mu.Lock()
+				if chunk.Status != ChunkCompleted {
+					errMsg := fmt.Sprintf("Chunk %d not completed (status: %s, progress: %d/%d)",
+						chunk.ID, chunk.Status, chunk.Progress,
+						chunk.End-chunk.Start+1)
+					chunk.mu.Unlock()
+					sendMessage(safeConn, "error", url, errMsg)
+					return
+				}
+				chunk.mu.Unlock()
+			}
 
-		if err := os.MkdirAll(downloadDir, 0755); err != nil {
-			sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to create download directory: %v", err))
-			return
-		}
+			// 2. Send 99.9% progress
+			sendProgress(safeConn, url, download.Size-1, download.Size, 0, "downloading")
+			sendMessage(safeConn, "log", url, "📥 99.9%")
+			time.Sleep(300 * time.Millisecond)
 
-		// 3. Merge chunks
-		sendMessage(safeConn, "log", url, "🔄 Merging chunks...")
-		if err := download.MergeChunks(destPath); err != nil {
-			sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to merge chunks: %v", err))
-			return
-		}
+			// 3. Then 100% progress
+			sendProgress(safeConn, url, download.Size, download.Size, 0, "completed")
+			sendMessage(safeConn, "log", url, "📥 100.0%")
+			time.Sleep(300 * time.Millisecond)
 
-		// 4. Completado y SHA
-		sendMessage(safeConn, "log", url, "✅ Download completed successfully")
-		handleCalculateChecksum(safeConn, url, filename)
+			// 4. Then merging message
+			sendMessage(safeConn, "log", url, "🔄 Merging chunks...")
 
-		// 5. Cleanup
-		if err := download.Cleanup(); err != nil {
-			sendMessage(safeConn, "log", url, fmt.Sprintf("Warning: Failed to clean temporary files: %v", err))
+			// 5. Perform actual merge with retry
+			var mergeErr error
+			for attempt := 0; attempt < 3; attempt++ {
+				if attempt > 0 {
+					sendMessage(safeConn, "log", url, fmt.Sprintf("Retrying merge (attempt %d/3)...", attempt+1))
+					time.Sleep(time.Second * time.Duration(attempt+1))
+				}
+
+				if err := download.MergeChunks(destPath); err != nil {
+					mergeErr = err
+					log.Printf("Merge attempt %d failed: %v", attempt+1, err)
+				} else {
+					mergeErr = nil
+					break
+				}
+			}
+
+			if mergeErr != nil {
+				sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to merge chunks: %v", mergeErr))
+				return
+			}
+
+			time.Sleep(300 * time.Millisecond)
+
+			// 6. Download completed message
+			sendMessage(safeConn, "log", url, "✅ Download completed successfully")
+			time.Sleep(300 * time.Millisecond)
+
+			// 7. Calculate checksum (just once)
+			handleCalculateChecksum(safeConn, url, filename)
+
+			// 8. Cleanup temporary files in background to avoid blocking
+			go func() {
+				if err := download.Cleanup(); err != nil {
+					log.Printf("Warning: Failed to clean temporary files: %v", err)
+				}
+			}()
+		} else {
+			// Add detailed error about incomplete chunks
+			incompleteChunks := []int{}
+			download.mu.RLock()
+			for _, chunk := range download.Chunks {
+				chunk.mu.Lock()
+				if chunk.Status != ChunkCompleted {
+					incompleteChunks = append(incompleteChunks, chunk.ID)
+				}
+				chunk.mu.Unlock()
+			}
+			download.mu.RUnlock()
+
+			errorMsg := fmt.Sprintf("Download incomplete: %d/%d chunks not completed. IDs: %v",
+				len(incompleteChunks), len(download.Chunks), incompleteChunks)
+			sendMessage(safeConn, "error", url, errorMsg)
 		}
 	}()
 }
@@ -475,110 +543,57 @@ func resumeChunkedDownload(safeConn *SafeConn, url string) {
 			sendMessage(safeConn, "error", url, fmt.Sprintf("Resume failed: %v", downloadError))
 			return
 		}
+
+		// Replace handleCompletedDownload with direct completion handling
 		if download.IsComplete() {
-			handleCompletedDownload(safeConn, url, download)
+			// Get destination path
+			home, err := os.UserHomeDir()
+			if err != nil {
+				sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to get home directory: %v", err))
+				return
+			}
+			downloadDir := filepath.Join(home, "Downloads")
+			destPath := filepath.Join(downloadDir, download.Filename)
+
+			if err := os.MkdirAll(downloadDir, 0755); err != nil {
+				sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to create download directory: %v", err))
+				return
+			}
+
+			// STRICTLY ORDERED SEQUENCE:
+			// 1. First send 99.9% progress
+			sendProgress(safeConn, url, download.Size-1, download.Size, 0, "downloading")
+			sendMessage(safeConn, "log", url, "📥 99.9%")
+			time.Sleep(300 * time.Millisecond)
+
+			// 2. Then 100% progress
+			sendProgress(safeConn, url, download.Size, download.Size, 0, "completed")
+			sendMessage(safeConn, "log", url, "📥 100.0%")
+			time.Sleep(300 * time.Millisecond)
+
+			// 3. Then merging message
+			sendMessage(safeConn, "log", url, "🔄 Merging chunks...")
+
+			// 4. Perform actual merge
+			if err := download.MergeChunks(destPath); err != nil {
+				sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to merge chunks: %v", err))
+				return
+			}
+			time.Sleep(300 * time.Millisecond)
+
+			// 5. Download completed message
+			sendMessage(safeConn, "log", url, "✅ Download completed successfully")
+			time.Sleep(300 * time.Millisecond)
+
+			// 6. Calculate checksum (just once)
+			handleCalculateChecksum(safeConn, url, download.Filename)
+
+			// 7. Cleanup temporary files
+			if err := download.Cleanup(); err != nil {
+				log.Printf("Warning: Failed to clean temporary files: %v", err)
+			}
 		}
 	}()
-}
-
-// Nueva función para manejar descargas completadas
-func handleCompletedDownload(safeConn *SafeConn, url string, download *ChunkedDownload) {
-	downloaded, total := download.GetProgress()
-	if total-downloaded > 1024 {
-		sendMessage(safeConn, "error", url, "Download incomplete")
-		return
-	}
-
-	// Force exact sequence:
-	// 1. Send completion status with force flag
-	safeConn.SendJSON(map[string]interface{}{
-		"type":    "final_completion",
-		"url":     url,
-		"message": "📥 100.0%",
-		"force":   true,
-	})
-	time.Sleep(500 * time.Millisecond)
-
-	// 2. Send progress update to ensure UI reflects 100%
-	safeConn.SendJSON(map[string]interface{}{
-		"type":          "progress",
-		"url":           url,
-		"bytesReceived": total,
-		"totalBytes":    total,
-		"status":        "completed",
-	})
-	time.Sleep(500 * time.Millisecond)
-
-	// 3. Send merge message
-	safeConn.SendJSON(map[string]interface{}{
-		"type":    "merge_start",
-		"url":     url,
-		"message": "🔄 Merging chunks...",
-	})
-
-	// Obtener ruta destino
-	home, err := os.UserHomeDir()
-	if err != nil {
-		sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to get home directory: %v", err))
-		return
-	}
-	downloadDir := filepath.Join(home, "Downloads")
-	destPath := filepath.Join(downloadDir, download.Filename)
-
-	// Crear directorio si no existe
-	if err := os.MkdirAll(downloadDir, 0755); err != nil {
-		sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to create download directory: %v", err))
-		return
-	}
-
-	// Verificar tamaño
-	downloaded, total = download.GetProgress()
-	if total-downloaded > 1024 {
-		sendMessage(safeConn, "error", url, "Download incomplete")
-		return
-	}
-
-	// Proper completion sequence - consolidated
-	total = download.Size
-
-	// Force exact sequence:
-	// 1. Set status to completed with exact progress
-	safeConn.SendJSON(map[string]interface{}{
-		"type":          "progress",
-		"url":           url,
-		"bytesReceived": total,
-		"totalBytes":    total,
-		"status":        "completed",
-	})
-	time.Sleep(200 * time.Millisecond)
-
-	// 2. Send 100% message
-	safeConn.SendJSON(map[string]interface{}{
-		"type":    "log",
-		"url":     url,
-		"message": "📥 100.0%",
-		"force":   true, // Add force flag
-	})
-	time.Sleep(500 * time.Millisecond)
-
-	// Wait longer before merge to ensure UI updates
-	time.Sleep(500 * time.Millisecond)
-
-	// Then start merge process
-	safeConn.SendJSON(map[string]interface{}{
-		"type":    "merge_start",
-		"url":     url,
-		"message": "🔄 Merging chunks...",
-	})
-
-	if err := download.MergeChunks(destPath); err != nil {
-		sendMessage(safeConn, "error", url, fmt.Sprintf("Failed to merge chunks: %v", err))
-		return
-	}
-
-	// 3. Final completion messages
-	sendMessage(safeConn, "log", url, "✅ Download completed successfully")
-	handleCalculateChecksum(safeConn, url, download.Filename)
 }
 
 // cancelChunkedDownload cancela una descarga en progreso
@@ -634,7 +649,8 @@ func markDownloadActive(url string) {
 	activeDownloadsMux.Lock()
 	activeDownloadsState[url] = downloadState{active: true, paused: false}
 	activeDownloadsMux.Unlock()
-	log.Printf("Download tracked: %s", url)
+	log.Printf("Download tracked: %s (active=%t, paused=%t)",
+		url, true, false)
 }
 
 // markDownloadInactive limpia el estado
@@ -682,7 +698,6 @@ func calculateSHA256(filePath string) (string, error) {
 	return checksum, nil
 }
 
-// handleCalculateChecksum procesa la solicitud de cálculo de checksum
 // handleCalculateChecksum procesa la solicitud de cálculo de checksum
 func handleCalculateChecksum(safeConn *SafeConn, url string, filename string) {
 	log.Printf("Calculating checksum for: %s", filename)
@@ -744,5 +759,296 @@ func calculateOptimalChunkSize(speed float64) int64 {
 		return DefaultChunkSize
 	default:
 		return MinChunkSize
+	}
+}
+
+// DownloadChunk descarga un chunk específico - modificado para usar la nueva función con retry
+func (d *ChunkedDownload) DownloadChunk(client *http.Client, chunk *Chunk, safeConn *SafeConn) error {
+	// Reset chunk state at start
+	chunk.mu.Lock()
+	if chunk.Status != ChunkCompleted {
+		chunk.Status = ChunkActive
+	}
+	chunk.mu.Unlock()
+
+	// Añadir log de inicio de chunk
+	log.Printf("Starting chunk %d: bytes %d-%d", chunk.ID, chunk.Start, chunk.End)
+
+	if chunk.Status == ChunkCompleted {
+		return nil
+	}
+
+	// Marcar como activo
+	chunk.mu.Lock()
+	chunk.Status = ChunkActive
+	chunk.mu.Unlock()
+
+	// Add retry loop with exponential backoff
+	var lastError error
+	retryCount := 0
+
+	for retryCount <= MaxChunkRetries {
+		if retryCount > 0 {
+			// Calculate backoff with exponential increase capped at MaxRetryDelay
+			delay := time.Duration(min(InitialRetryDelay<<uint(retryCount-1), MaxRetryDelay)) * time.Second
+			log.Printf("Retrying chunk %d (attempt %d/%d) after %v delay",
+				chunk.ID, retryCount, MaxChunkRetries, delay)
+
+			// Send retry info to client
+			if safeConn != nil {
+				safeConn.SendJSON(map[string]interface{}{
+					"type": "chunk_retry",
+					"url":  d.URL,
+					"chunk": ChunkProgress{
+						ID:     chunk.ID,
+						Start:  chunk.Start,
+						End:    chunk.End,
+						Status: "retrying",
+					},
+					"retry":       retryCount,
+					"max_retries": MaxChunkRetries,
+					"delay":       delay.Seconds(),
+				})
+			}
+
+			time.Sleep(delay)
+		}
+
+		// Check if the download has been paused or canceled
+		select {
+		case <-chunk.cancelCtx:
+			chunk.mu.Lock()
+			if chunk.Status == ChunkActive {
+				chunk.Status = ChunkPaused
+			}
+			chunk.mu.Unlock()
+			return nil
+		default:
+			if d.Paused {
+				chunk.mu.Lock()
+				if chunk.Status == ChunkActive {
+					chunk.Status = ChunkPaused
+				}
+				chunk.mu.Unlock()
+				return nil
+			}
+		}
+
+		// Try the download using our new timeout method
+		err := d.tryDownloadChunkWithTimeout(client, chunk, safeConn)
+		if err == nil {
+			// Success!
+			return nil
+		}
+
+		// Log the error and retry
+		lastError = err
+		log.Printf("Chunk %d download failed (attempt %d/%d): %v",
+			chunk.ID, retryCount+1, MaxChunkRetries+1, err)
+
+		// Increment retry count and continue
+		retryCount++
+	}
+
+	// If we get here, all retries failed
+	chunk.mu.Lock()
+	chunk.Status = ChunkFailed
+	chunk.Error = lastError.Error()
+	chunk.mu.Unlock()
+
+	return fmt.Errorf("chunk %d failed after %d retries: %v",
+		chunk.ID, MaxChunkRetries, lastError)
+}
+
+// tryDownloadChunkWithTimeout handles downloading a chunk with timeout detection
+func (d *ChunkedDownload) tryDownloadChunkWithTimeout(client *http.Client, chunk *Chunk, safeConn *SafeConn) error {
+	// Crear o abrir archivo para el chunk
+	file, err := os.OpenFile(chunk.Path, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open chunk file: %v", err)
+	}
+	defer file.Close()
+
+	// Establecer posición inicial
+	if chunk.Progress > 0 {
+		if _, err := file.Seek(chunk.Progress, 0); err != nil {
+			return fmt.Errorf("failed to seek in chunk file: %v", err)
+		}
+	}
+
+	// Crear request con rango
+	req, err := http.NewRequest("GET", d.URL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
+	}
+
+	// Establecer rango de bytes para este chunk
+	rangeStart := chunk.Start + chunk.Progress
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", rangeStart, chunk.End))
+
+	// Añadir User-Agent para evitar bloqueos/limitaciones
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.93 Safari/537.36")
+
+	// Add context with timeout to detect stuck downloads
+	ctx, cancel := context.WithTimeout(context.Background(), DownloadTimeout*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	// Iniciar descarga
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to start download: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("server returned status code %d", resp.StatusCode)
+	}
+
+	// Verificar si el servidor soporta rangos
+	if resp.StatusCode != http.StatusPartialContent {
+		// Some servers don't return 206 but still honor range - try to continue
+		log.Printf("Warning: Server didn't respond with 206 Partial Content, but trying to continue")
+	}
+
+	// Add progress monitoring with timeout detection
+	startTime := time.Now()
+	lastProgressTime := time.Now()
+	lastProgress := chunk.Progress
+	updateInterval := 100 * time.Millisecond
+	buffer := make([]byte, 512*1024)
+	lastUpdate := time.Now() // Define lastUpdate here to fix the undefined variable error
+
+	// Create a channel for the download goroutine
+	downloadDone := make(chan error, 1)
+
+	// Start the download in a separate goroutine
+	go func() {
+		for {
+			// Check if download has been canceled or paused
+			select {
+			case <-chunk.cancelCtx:
+				downloadDone <- nil
+				return
+			default:
+				if d.Paused {
+					downloadDone <- nil
+					return
+				}
+			}
+
+			// Read data with timeout
+			n, err := resp.Body.Read(buffer)
+			if n > 0 {
+				// Write to file
+				_, writeErr := file.Write(buffer[:n])
+				if writeErr != nil {
+					downloadDone <- fmt.Errorf("write error: %v", writeErr)
+					return
+				}
+
+				// Update progress
+				chunk.mu.Lock()
+				chunk.Progress += int64(n)
+				currentProgress := chunk.Progress
+				chunk.mu.Unlock()
+
+				lastProgressTime = time.Now() // Update progress time
+
+				// Send progress update at interval
+				now := time.Now()
+				if now.Sub(lastUpdate) >= updateInterval {
+					elapsed := now.Sub(startTime).Seconds()
+					if elapsed > 0 {
+						speed := float64(currentProgress-lastProgress) / now.Sub(lastUpdate).Seconds()
+
+						// Report progress with speed
+						if safeConn != nil {
+							d.mu.RLock()
+							safeConn.SendJSON(map[string]interface{}{
+								"type": "chunk_progress",
+								"url":  d.URL,
+								"chunk": ChunkProgress{
+									ID:       chunk.ID,
+									Start:    chunk.Start,
+									End:      chunk.End,
+									Progress: currentProgress,
+									Status:   chunk.Status,
+									Speed:    speed,
+								},
+							})
+
+							// Also report overall progress
+							downloaded, total := d.GetProgress()
+							safeConn.SendJSON(map[string]interface{}{
+								"type":          "progress",
+								"url":           d.URL,
+								"bytesReceived": downloaded,
+								"totalBytes":    total,
+								"speed":         speed,
+							})
+							d.mu.RUnlock()
+						}
+
+						lastUpdate = now
+						lastProgress = currentProgress
+					}
+				}
+			}
+
+			if err != nil {
+				if err == io.EOF {
+					// Successfully completed
+					chunk.markCompleted()
+
+					// Report stats
+					elapsed := time.Since(startTime)
+					totalBytes := chunk.End - chunk.Start + 1
+					avgSpeed := float64(totalBytes) / elapsed.Seconds()
+
+					log.Printf("Chunk %d completed in %.2fs (%.2f MB/s)",
+						chunk.ID, elapsed.Seconds(), avgSpeed/(1024*1024))
+
+					// Send final notification
+					if safeConn != nil {
+						safeConn.SendJSON(map[string]interface{}{
+							"type": "chunk_progress",
+							"url":  d.URL,
+							"chunk": ChunkProgress{
+								ID:        chunk.ID,
+								Start:     chunk.Start,
+								End:       chunk.End,
+								Progress:  totalBytes,
+								Status:    ChunkCompleted,
+								Speed:     0,
+								Completed: chunk.End + 1,
+							},
+						})
+					}
+
+					downloadDone <- nil
+					return
+				}
+
+				// Other error - signal failure
+				downloadDone <- err
+				return
+			}
+
+			// Check if download is stuck (no progress for a while)
+			if time.Since(lastProgressTime) > StuckProgressTimeout*time.Second {
+				downloadDone <- fmt.Errorf("download stuck - no progress for %d seconds", StuckProgressTimeout)
+				return
+			}
+		}
+	}()
+
+	// Wait for download completion or timeout
+	select {
+	case err := <-downloadDone:
+		return err
+	case <-ctx.Done():
+		// Timeout occurred
+		return fmt.Errorf("download timeout after %d seconds", DownloadTimeout)
 	}
 }

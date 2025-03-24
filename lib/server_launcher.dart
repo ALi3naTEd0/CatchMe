@@ -1,31 +1,33 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
-import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
+import 'package:logging/logging.dart';
 
 class ServerLauncher {
   static final ServerLauncher _instance = ServerLauncher._internal();
   factory ServerLauncher() => _instance;
+
+  final _logger = Logger('ServerLauncher');
+
   ServerLauncher._internal();
 
   Process? _serverProcess;
   bool get isRunning => _serverProcess != null;
-  
+
   final _statusController = StreamController<bool>.broadcast();
   Stream<bool> get statusStream => _statusController.stream;
 
   final _logFile = File('logs/server.log');
-  
+
   bool _serviceMode = false;
 
   Future<void> _log(String message) async {
     final timestamp = DateTime.now().toIso8601String();
     final logMessage = '[$timestamp] $message\n';
-    
+
     await Directory('logs').create(recursive: true);
     await _logFile.writeAsString(logMessage, mode: FileMode.append);
-    print(logMessage);
+    _logger.info(message);
   }
 
   Future<void> startServer({bool asService = false}) async {
@@ -37,7 +39,7 @@ class ServerLauncher {
     try {
       await _log('=== Iniciando servidor Go ===');
       _serviceMode = asService;
-      
+
       // Verificar puerto en uso
       try {
         final result = await Process.run('lsof', ['-t', '-i:8080']);
@@ -53,12 +55,14 @@ class ServerLauncher {
 
       final serverDir = Directory('server');
       if (!serverDir.existsSync()) {
-        throw Exception('Server directory not found: ${serverDir.absolute.path}');
+        throw Exception(
+          'Server directory not found: ${serverDir.absolute.path}',
+        );
       }
 
       // Limpiar caché antes de iniciar
       await _log('Preparando servidor...');
-      
+
       // Si es modo servicio, añadir el argumento correspondiente
       final List<String> args = ['run', '.'];
       if (_serviceMode) {
@@ -71,7 +75,7 @@ class ServerLauncher {
         args,
         workingDirectory: serverDir.absolute.path,
       );
-      
+
       if (_serviceMode) {
         await _log('=== Servidor Go iniciado como servicio ===');
       } else {
@@ -84,7 +88,6 @@ class ServerLauncher {
 
       // Esperar para verificar que inició correctamente
       await Future.delayed(Duration(seconds: 2));
-      
     } catch (e, stack) {
       await _log('Error iniciando servidor: $e\n$stack');
       _statusController.add(false);
@@ -97,7 +100,7 @@ class ServerLauncher {
       await _log('Server stdout: $data');
       if (data.contains('Starting server on :8080') ||
           data.contains('CatchMe service started')) {
-        _statusController.add(true);  // Servidor iniciado
+        _statusController.add(true); // Servidor iniciado
       }
     });
 
@@ -108,9 +111,9 @@ class ServerLauncher {
     // Monitorear si el proceso termina
     _serverProcess!.exitCode.then((code) async {
       await _log('Server exited with code $code');
-      _statusController.add(false);  // Servidor detenido
+      _statusController.add(false); // Servidor detenido
       _serverProcess = null;
-      
+
       // No reintentar si estamos en modo servicio y fue terminación normal
       if (!_serviceMode || code != 0) {
         _attemptRecovery();
@@ -124,21 +127,23 @@ class ServerLauncher {
 
   Future<void> stopServer() async {
     if (!isRunning) return;
-    
+
     try {
       await _log('=== Deteniendo servidor Go ===');
-      
+
       if (_serviceMode) {
         // En modo servicio, enviar señal SIGTERM para un apagado limpio
         _serverProcess?.kill(ProcessSignal.sigterm);
-        await Future.delayed(const Duration(seconds: 3)); // Dar más tiempo para limpieza en modo servicio
+        await Future.delayed(
+          const Duration(seconds: 3),
+        ); // Dar más tiempo para limpieza en modo servicio
       }
-      
+
       // Si todavía está ejecutando, forzar terminación
       if (_serverProcess != null) {
         _serverProcess?.kill(ProcessSignal.sigkill);
       }
-      
+
       await _log('=== Servidor detenido ===');
     } catch (e) {
       await _log('Error deteniendo servidor: $e');

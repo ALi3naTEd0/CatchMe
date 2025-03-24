@@ -1,6 +1,7 @@
 package main
 
 import (
+	// Add this import for context support
 	"encoding/json"
 	"fmt"
 	"io"

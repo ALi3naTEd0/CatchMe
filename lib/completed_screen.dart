@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:logging/logging.dart';
 import 'dart:io';
-import 'package:path_provider/path_provider.dart';
 import 'download_item.dart';
 import 'download_service.dart';
 
@@ -13,6 +13,7 @@ class CompletedScreen extends StatefulWidget {
 }
 
 class _CompletedScreenState extends State<CompletedScreen> {
+  final _logger = Logger('CompletedScreen');
   // Crear una lista local de descargas completadas para mantenerlas
   final List<DownloadItem> _completedDownloads = [];
   final _downloadService = DownloadService();
@@ -22,7 +23,7 @@ class _CompletedScreenState extends State<CompletedScreen> {
     super.initState();
     // Inicializar con descargas completadas existentes
     _updateCompletedDownloads();
-    
+
     // Escuchar a nuevas descargas completadas
     _downloadService.downloadStream.listen((download) {
       if (download.status == DownloadStatus.completed) {
@@ -30,19 +31,20 @@ class _CompletedScreenState extends State<CompletedScreen> {
       }
     });
   }
-  
+
   void _updateCompletedDownloads() {
     // Obtener descargas ya completadas del servicio
-    final serviceCompleted = _downloadService.downloads
-        .where((item) => item.status == DownloadStatus.completed)
-        .toList();
-        
+    final serviceCompleted =
+        _downloadService.downloads
+            .where((item) => item.status == DownloadStatus.completed)
+            .toList();
+
     // Añadir solo las que no existan ya en nuestra lista
     for (final download in serviceCompleted) {
       _addCompletedDownload(download);
     }
   }
-  
+
   void _addCompletedDownload(DownloadItem download) {
     if (!_completedDownloads.any((item) => item.url == download.url)) {
       setState(() {
@@ -59,7 +61,7 @@ class _CompletedScreenState extends State<CompletedScreen> {
       });
     }
   }
-  
+
   void _removeCompletedDownload(DownloadItem download) {
     setState(() {
       _completedDownloads.removeWhere((item) => item.url == download.url);
@@ -112,7 +114,10 @@ class _CompletedScreenState extends State<CompletedScreen> {
                               children: [
                                 Text(
                                   'SHA-256:',
-                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                                 Text(
                                   download.checksum!,
@@ -163,8 +168,8 @@ class _CompletedScreenState extends State<CompletedScreen> {
   void _openFileLocation(DownloadItem download) async {
     try {
       final home = Platform.environment['HOME']!;
-      final path = '${home}/Downloads';
-      print('Opening folder: $path');
+      final path = '$home/Downloads';
+      _logger.info('Opening folder: $path');
 
       if (Platform.isLinux) {
         // Evitar bloquear la UI usando spawn
@@ -178,7 +183,7 @@ class _CompletedScreenState extends State<CompletedScreen> {
         await Process.run('open', [path]);
       }
     } catch (e) {
-      print('Error opening folder: $e');
+      _logger.severe('Error opening folder: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not open Downloads folder')),
@@ -190,9 +195,9 @@ class _CompletedScreenState extends State<CompletedScreen> {
   void _copyChecksum(DownloadItem download) {
     if (download.checksum != null) {
       Clipboard.setData(ClipboardData(text: download.checksum!));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Checksum copied to clipboard')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Checksum copied to clipboard')));
     }
   }
 }

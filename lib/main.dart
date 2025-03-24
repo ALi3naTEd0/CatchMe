@@ -1,12 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:logging/logging.dart';
 import 'downloads_screen.dart';
 import 'completed_screen.dart';
 import 'settings_screen.dart';
-import 'server_launcher.dart';  // Update import path
+import 'server_launcher.dart';
 
 void main() async {
-  // Quitar debug banner
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize logging
+  Logger.root.level = Level.ALL;
+  Logger.root.onRecord.listen((record) {
+    debugPrint('${record.level.name}: ${record.time}: ${record.message}');
+  });
+
   runApp(const MyApp());
 }
 
@@ -15,39 +22,35 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Definir el color una vez para usarlo en toda la app
     final accentColor = Colors.blue[300] ?? Colors.blue;
 
     return MaterialApp(
-      debugShowCheckedModeBanner: false, // Quitar banner de debug
+      debugShowCheckedModeBanner: false,
       title: 'CatchMe',
       theme: ThemeData(
         colorScheme: ColorScheme.dark(
-          primary: accentColor,      // Color unificado
-          secondary: accentColor.withOpacity(0.7),
+          primary: accentColor,
+          secondary: accentColor.withAlpha((0.7 * 255).round()),
           surface: const Color(0xFF1E1E1E),
-          background: const Color(0xFF121212),
           onPrimary: Colors.white,
         ),
-        cardTheme: const CardTheme(
-          color: Color(0xFF2A2A2A),
-        ),
+        cardTheme: const CardTheme(color: Color(0xFF2A2A2A)),
         navigationRailTheme: NavigationRailThemeData(
           selectedIconTheme: const IconThemeData(
-            color: Colors.white,  // Icono blanco cuando está activo
+            color: Colors.white, // Icono blanco cuando está activo
           ),
           selectedLabelTextStyle: TextStyle(
-            color: accentColor,   // Usar el mismo accentColor
+            color: accentColor, // Usar el mismo accentColor
             fontWeight: FontWeight.bold,
           ),
           unselectedIconTheme: IconThemeData(
-            color: Colors.grey[600],  // Icono gris cuando está inactivo
+            color: Colors.grey[600], // Icono gris cuando está inactivo
           ),
           unselectedLabelTextStyle: TextStyle(
-            color: Colors.grey[600],  // Texto gris cuando está inactivo
+            color: Colors.grey[600], // Texto gris cuando está inactivo
           ),
           backgroundColor: Colors.transparent,
-          indicatorColor: accentColor,  // Color del indicador seleccionado
+          indicatorColor: accentColor, // Color del indicador seleccionado
         ),
         useMaterial3: true,
       ),
@@ -64,13 +67,15 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
+  final _logger = Logger('MainScreen');
   int _selectedIndex = 0;
   bool _serverStarted = false;
   String _statusMessage = 'Initializing...';
-  bool _useServiceMode = false; // Nuevo campo
-  
-  static const List<Widget> _screens = [
-    DownloadsScreen(),
+  final bool _useServiceMode = false; // Made final since it's not modified
+
+  // Remove const from list since widgets aren't constant
+  static final List<Widget> _screens = [
+    DownloadsScreen(key: downloadsKey),
     CompletedScreen(),
     SettingsScreen(),
   ];
@@ -80,7 +85,7 @@ class _MainScreenState extends State<MainScreen> {
     super.initState();
     _startServerAndInitServices();
   }
-  
+
   // Método para iniciar servidor y después servicios
   Future<void> _startServerAndInitServices() async {
     setState(() {
@@ -90,7 +95,7 @@ class _MainScreenState extends State<MainScreen> {
     try {
       // Iniciar el servidor backend en modo seleccionado
       await ServerLauncher().startServer(asService: _useServiceMode);
-      
+
       setState(() {
         _statusMessage = 'Connecting to server...';
       });
@@ -103,15 +108,15 @@ class _MainScreenState extends State<MainScreen> {
           setState(() {
             _statusMessage = 'Connecting to server (attempt ${i + 1}/5)...';
           });
-          
+
           // Verificar si el servidor está corriendo
           if (!ServerLauncher().isRunning) {
             throw Exception('Server not running');
           }
-          
+
           connected = true;
         } catch (e) {
-          print('Connection attempt $i failed: $e');
+          _logger.warning('Connection attempt $i failed: $e');
         }
       }
 
@@ -179,15 +184,10 @@ class _MainScreenState extends State<MainScreen> {
       body: Row(
         children: [
           // Side panel solo si hay espacio
-          if (showSidebar)
-            Container(
-              width: 200,
-              child: _buildSidePanel(),
-            ),
+          if (showSidebar) SizedBox(width: 200, child: _buildSidePanel()),
 
-          if (showSidebar)
-            const VerticalDivider(thickness: 1, width: 1),
-          
+          if (showSidebar) const VerticalDivider(thickness: 1, width: 1),
+
           // Main content
           Expanded(
             child: Column(
@@ -219,17 +219,18 @@ class _MainScreenState extends State<MainScreen> {
                 else
                   // Screen content
                   Expanded(child: _screens[_selectedIndex]),
-                
+
                 // Server status bar
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 32,
+                    vertical: 8,
+                  ),
                   margin: const EdgeInsets.only(bottom: 8),
                   color: Theme.of(context).colorScheme.surface,
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      _buildServerStatus(),
-                    ],
+                    children: [_buildServerStatus()],
                   ),
                 ),
               ],
@@ -241,9 +242,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildNavigationDrawer() {
-    return Drawer(
-      child: _buildSidePanel(),
-    );
+    return Drawer(child: _buildSidePanel());
   }
 
   Widget _buildSidePanel() {
@@ -286,11 +285,7 @@ class _MainScreenState extends State<MainScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                Icons.extension,
-                size: 16,
-                color: Colors.orange,
-              ),
+              Icon(Icons.extension, size: 16, color: Colors.orange),
               SizedBox(width: 8),
               Text(
                 'Disconnected',
@@ -304,25 +299,6 @@ class _MainScreenState extends State<MainScreen> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildServiceModeToggle() {
-    return SwitchListTile(
-      title: Text('Run as background service'),
-      subtitle: Text('Keep downloads running even when app is closed'),
-      value: _useServiceMode,
-      onChanged: (value) {
-        setState(() {
-          _useServiceMode = value;
-        });
-        // Si el servidor ya está corriendo, reiniciarlo con la nueva configuración
-        if (ServerLauncher().isRunning) {
-          ServerLauncher().stopServer().then((_) {
-            _startServerAndInitServices();
-          });
-        }
-      },
     );
   }
 }
