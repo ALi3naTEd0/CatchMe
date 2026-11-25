@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main, go-rewrite]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go-test:
+    name: Go tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: catchmed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: catchmed/go.mod
+          cache-dependency-path: catchmed/go.sum
+      - run: go vet ./...
+      - name: Tests with race detector and goroutine leak checks
+        if: runner.os != 'Windows'
+        run: go test -race -count=1 ./...
+      - name: Tests (Windows, no race detector)
+        if: runner.os == 'Windows'
+        run: go test -count=1 ./...
+
+  go-checks:
+    name: Go lint, vulnerabilities, fuzzing
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: catchmed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: catchmed/go.mod
+          cache-dependency-path: catchmed/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Fuzz range planning
+        run: go test ./internal/download -run '^$' -fuzz FuzzPlan -fuzztime 20s
+      - name: Fuzz file name sanitizing
+        run: go test ./internal/download -run '^$' -fuzz FuzzSanitizeFilename -fuzztime 20s
+
+  flutter:
+    name: Flutter app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: catchmed/go.mod
+          cache-dependency-path: catchmed/go.sum
+      - name: Build the daemon the app tests start
+        working-directory: catchmed
+        run: go build -trimpath -o bin/catchmed ./cmd/catchmed
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test

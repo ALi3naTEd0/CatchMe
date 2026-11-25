@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +39,7 @@ func startDaemon(t *testing.T, extraArgs ...string) (addr string, closeStdin fun
 		case <-time.After(10 * time.Second):
 			t.Error("daemon did not stop")
 		}
+		stdoutW.Close() // ends the goroutine draining stdout
 	})
 
 	line, err := bufio.NewReader(stdoutR).ReadString('\n')
@@ -122,7 +124,7 @@ func TestTokenFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := fi.Mode().Perm(); perm != 0o600 {
+	if perm := fi.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 { // Windows has no Unix permissions
 		t.Errorf("token file mode %o, want 600", perm)
 	}
 	t.Setenv("CATCHME_TOKEN", "from-env")

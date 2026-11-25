@@ -166,6 +166,11 @@ func (t *Task) Run(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 	finalPath := t.Snapshot().Path
+	// Close before renaming: Windows cannot rename a file that is still open.
+	// The deferred Close then does nothing.
+	if err := part.Close(); err != nil {
+		return Result{}, fmt.Errorf("download: %w", err)
+	}
 	if err := os.Rename(part.Name(), finalPath); err != nil {
 		return Result{}, fmt.Errorf("download: %w", err)
 	}
