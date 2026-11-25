@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:logging/logging.dart';
 
@@ -7,7 +10,8 @@ import 'screens/completed_screen.dart';
 import 'screens/downloads_screen.dart';
 import 'screens/settings_screen.dart';
 
-const appVersion = '2.0.0-dev';
+/// Set by release builds with --dart-define=CATCHME_VERSION=x.y.z.
+const appVersion = String.fromEnvironment('CATCHME_VERSION', defaultValue: '2.0.0-dev');
 
 void main() {
   Logger.root.level = Level.INFO;
@@ -79,10 +83,26 @@ class _StartupScreenState extends State<StartupScreen> {
       final addr = await widget.daemon.start();
       final client = CatchMeClient(address: addr, token: widget.daemon.token);
       await client.connect().timeout(const Duration(seconds: 10));
+      await _writeSmokeReport(client);
       if (mounted) setState(() => _client = client);
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
     }
+  }
+
+  /// CI smoke test: when CATCHME_SMOKE_FILE is set, record that the packaged
+  /// app found its bundled engine and connected to it.
+  Future<void> _writeSmokeReport(CatchMeClient client) async {
+    final path = Platform.environment['CATCHME_SMOKE_FILE'];
+    if (path == null || path.isEmpty) return;
+    await File(path).writeAsString(
+      jsonEncode({
+        'connected': client.state == LinkState.connected,
+        'engineVersion': client.daemonVersion,
+        'engine': Daemon.findBinary(),
+        'appVersion': appVersion,
+      }),
+    );
   }
 
   @override

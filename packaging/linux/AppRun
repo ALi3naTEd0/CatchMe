@@ -1,0 +1,4 @@
+#!/bin/sh
+# Entry point of the AppImage: start the app from wherever it was mounted.
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/catchme" "$@"

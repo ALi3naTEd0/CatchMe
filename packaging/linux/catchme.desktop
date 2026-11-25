@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=CatchMe
+Comment=Fast downloads that pause, resume and survive restarts
+Exec=catchme
+Icon=catchme
+Categories=Network;FileTransfer;
+Terminal=false

@@ -47,3 +47,4 @@ app.*.map.json
 # Go rewrite
 catchmed/bin/
 catchmed/coverage.out
+dist/
