@@ -1,304 +1,197 @@
 import 'package:flutter/material.dart';
 import 'package:logging/logging.dart';
-import 'downloads_screen.dart';
-import 'completed_screen.dart';
-import 'settings_screen.dart';
-import 'server_launcher.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+import 'core/catchme_client.dart';
+import 'core/daemon.dart';
+import 'screens/completed_screen.dart';
+import 'screens/downloads_screen.dart';
+import 'screens/settings_screen.dart';
 
-  // Initialize logging
-  Logger.root.level = Level.ALL;
-  Logger.root.onRecord.listen((record) {
-    debugPrint('${record.level.name}: ${record.time}: ${record.message}');
-  });
+const appVersion = '2.0.0-dev';
 
-  runApp(const MyApp());
+void main() {
+  Logger.root.level = Level.INFO;
+  Logger.root.onRecord.listen((r) => debugPrint('${r.level.name} ${r.loggerName}: ${r.message}'));
+  runApp(const CatchMeApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+ThemeData _theme() {
+  final accent = Colors.blue[300]!;
+  return ThemeData(
+    useMaterial3: true,
+    colorScheme: ColorScheme.dark(
+      primary: accent,
+      secondary: accent.withAlpha(180),
+      surface: const Color(0xFF1E1E1E),
+      onPrimary: Colors.black,
+    ),
+    cardTheme: const CardThemeData(color: Color(0xFF2A2A2A)),
+    navigationRailTheme: NavigationRailThemeData(
+      backgroundColor: Colors.transparent,
+      indicatorColor: accent,
+      selectedIconTheme: const IconThemeData(color: Colors.black),
+      selectedLabelTextStyle: TextStyle(color: accent, fontWeight: FontWeight.bold),
+      unselectedIconTheme: IconThemeData(color: Colors.grey[500]),
+      unselectedLabelTextStyle: TextStyle(color: Colors.grey[500]),
+    ),
+  );
+}
+
+class CatchMeApp extends StatelessWidget {
+  const CatchMeApp({super.key, this.daemon});
+
+  /// Injected in tests; normally the bundled daemon.
+  final Daemon? daemon;
 
   @override
   Widget build(BuildContext context) {
-    final accentColor = Colors.blue[300] ?? Colors.blue;
-
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'CatchMe',
-      theme: ThemeData(
-        colorScheme: ColorScheme.dark(
-          primary: accentColor,
-          secondary: accentColor.withAlpha((0.7 * 255).round()),
-          surface: const Color(0xFF1E1E1E),
-          onPrimary: Colors.white,
+      theme: _theme(),
+      home: StartupScreen(daemon: daemon ?? Daemon()),
+    );
+  }
+}
+
+/// Starts the engine and connects to it, then shows the app.
+class StartupScreen extends StatefulWidget {
+  const StartupScreen({super.key, required this.daemon});
+  final Daemon daemon;
+
+  @override
+  State<StartupScreen> createState() => _StartupScreenState();
+}
+
+class _StartupScreenState extends State<StartupScreen> {
+  CatchMeClient? _client;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _start();
+  }
+
+  Future<void> _start() async {
+    setState(() => _error = null);
+    try {
+      final addr = await widget.daemon.start();
+      final client = CatchMeClient(address: addr, token: widget.daemon.token);
+      await client.connect().timeout(const Duration(seconds: 10));
+      if (mounted) setState(() => _client = client);
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _client?.close();
+    widget.daemon.stop();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final client = _client;
+    if (client != null) return MainScreen(client: client);
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_error == null) ...[
+              const CircularProgressIndicator(),
+              const SizedBox(height: 16),
+              const Text('Starting the download engine…'),
+            ] else ...[
+              const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
+              const SizedBox(height: 16),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Text(_error!, textAlign: TextAlign.center),
+              ),
+              const SizedBox(height: 16),
+              FilledButton(onPressed: _start, child: const Text('Try again')),
+            ],
+          ],
         ),
-        cardTheme: const CardTheme(color: Color(0xFF2A2A2A)),
-        navigationRailTheme: NavigationRailThemeData(
-          selectedIconTheme: const IconThemeData(
-            color: Colors.white, // Icono blanco cuando está activo
-          ),
-          selectedLabelTextStyle: TextStyle(
-            color: accentColor, // Usar el mismo accentColor
-            fontWeight: FontWeight.bold,
-          ),
-          unselectedIconTheme: IconThemeData(
-            color: Colors.grey[600], // Icono gris cuando está inactivo
-          ),
-          unselectedLabelTextStyle: TextStyle(
-            color: Colors.grey[600], // Texto gris cuando está inactivo
-          ),
-          backgroundColor: Colors.transparent,
-          indicatorColor: accentColor, // Color del indicador seleccionado
-        ),
-        useMaterial3: true,
       ),
-      home: const MainScreen(),
     );
   }
 }
 
 class MainScreen extends StatefulWidget {
-  const MainScreen({super.key});
+  const MainScreen({super.key, required this.client});
+  final CatchMeClient client;
 
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
 
 class _MainScreenState extends State<MainScreen> {
-  final _logger = Logger('MainScreen');
-  int _selectedIndex = 0;
-  bool _serverStarted = false;
-  String _statusMessage = 'Initializing...';
-  final bool _useServiceMode = false; // Made final since it's not modified
-
-  // Remove const from list since widgets aren't constant
-  static final List<Widget> _screens = [
-    DownloadsScreen(key: downloadsKey),
-    CompletedScreen(),
-    SettingsScreen(),
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    _startServerAndInitServices();
-  }
-
-  // Método para iniciar servidor y después servicios
-  Future<void> _startServerAndInitServices() async {
-    setState(() {
-      _statusMessage = 'Starting server...';
-    });
-
-    try {
-      // Iniciar el servidor backend en modo seleccionado
-      await ServerLauncher().startServer(asService: _useServiceMode);
-
-      setState(() {
-        _statusMessage = 'Connecting to server...';
-      });
-
-      // Intentar conectar con timeout, con más intentos para asegurar conexión
-      bool connected = false;
-      for (int i = 0; i < 5 && !connected; i++) {
-        try {
-          await Future.delayed(Duration(seconds: 1));
-          setState(() {
-            _statusMessage = 'Connecting to server (attempt ${i + 1}/5)...';
-          });
-
-          // Verificar si el servidor está corriendo
-          if (!ServerLauncher().isRunning) {
-            throw Exception('Server not running');
-          }
-
-          connected = true;
-        } catch (e) {
-          _logger.warning('Connection attempt $i failed: $e');
-        }
-      }
-
-      if (!connected) {
-        throw Exception('Could not connect to server');
-      }
-
-      setState(() {
-        _serverStarted = true;
-        _statusMessage = 'Server connected successfully';
-      });
-    } catch (e) {
-      setState(() {
-        _statusMessage = 'Error: $e\nTap to retry';
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    // Asegurarse de cerrar el servidor al salir
-    ServerLauncher().stopServer();
-    super.dispose();
-  }
-
-  Widget _buildServerStatus() {
-    return StreamBuilder<bool>(
-      stream: ServerLauncher().statusStream,
-      initialData: false,
-      builder: (context, snapshot) {
-        final isRunning = snapshot.data ?? false;
-        return Row(
-          children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: isRunning ? Colors.green : Colors.red,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              isRunning ? 'Server Running' : 'Server Stopped',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold, // Texto en negrita
-                color: isRunning ? Colors.green : Colors.red,
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
+  int _selected = 0;
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final showSidebar = screenWidth > 600; // Hide sidebar on very small screens
+    final screens = [
+      DownloadsScreen(client: widget.client),
+      CompletedScreen(client: widget.client),
+      SettingsScreen(client: widget.client, appVersion: appVersion),
+    ];
+    final wide = MediaQuery.sizeOf(context).width > 600;
+    final rail = NavigationRail(
+      extended: wide,
+      selectedIndex: _selected,
+      onDestinationSelected: (i) => setState(() => _selected = i),
+      destinations: const [
+        NavigationRailDestination(icon: Icon(Icons.download), label: Text('Downloads')),
+        NavigationRailDestination(icon: Icon(Icons.check_circle), label: Text('Completed')),
+        NavigationRailDestination(icon: Icon(Icons.settings), label: Text('Settings')),
+      ],
+    );
 
     return Scaffold(
-      // Drawer para mobile
-      drawer: !showSidebar ? _buildNavigationDrawer() : null,
       body: Row(
         children: [
-          // Side panel solo si hay espacio
-          if (showSidebar) SizedBox(width: 200, child: _buildSidePanel()),
-
-          if (showSidebar) const VerticalDivider(thickness: 1, width: 1),
-
-          // Main content
-          Expanded(
-            child: Column(
-              children: [
-                if (!showSidebar)
-                  AppBar(
-                    title: const Text('CatchMe'),
-                    backgroundColor: Theme.of(context).colorScheme.surface,
-                  ),
-                // Show loading if server not started yet
-                if (!_serverStarted)
-                  Expanded(
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          CircularProgressIndicator(),
-                          SizedBox(height: 16),
-                          Text(_statusMessage),
-                          if (_statusMessage.contains('Error'))
-                            TextButton(
-                              onPressed: _startServerAndInitServices,
-                              child: Text('Retry'),
-                            ),
-                        ],
-                      ),
-                    ),
-                  )
-                else
-                  // Screen content
-                  Expanded(child: _screens[_selectedIndex]),
-
-                // Server status bar
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 32,
-                    vertical: 8,
-                  ),
-                  margin: const EdgeInsets.only(bottom: 8),
-                  color: Theme.of(context).colorScheme.surface,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [_buildServerStatus()],
-                  ),
-                ),
-              ],
-            ),
-          ),
+          SizedBox(width: wide ? 200 : 80, child: rail),
+          const VerticalDivider(width: 1),
+          Expanded(child: Column(children: [Expanded(child: screens[_selected]), _StatusBar(client: widget.client)])),
         ],
       ),
     );
   }
+}
 
-  Widget _buildNavigationDrawer() {
-    return Drawer(child: _buildSidePanel());
-  }
+class _StatusBar extends StatelessWidget {
+  const _StatusBar({required this.client});
+  final CatchMeClient client;
 
-  Widget _buildSidePanel() {
-    return Column(
-      children: [
-        // Navigation rail content
-        Expanded(
-          child: NavigationRail(
-            extended: true,
-            destinations: const [
-              NavigationRailDestination(
-                icon: Icon(Icons.download),
-                label: Text('Downloads'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.check_circle),
-                label: Text('Completed'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(Icons.settings),
-                label: Text('Settings'),
-              ),
-            ],
-            selectedIndex: _selectedIndex,
-            onDestinationSelected: (int index) {
-              setState(() {
-                _selectedIndex = index;
-              });
-            },
-          ),
-        ),
-        // Extension status
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          margin: const EdgeInsets.only(bottom: 8, left: 8, right: 8),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.circular(4),
-          ),
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: client,
+      builder: (context, _) {
+        final (text, color) = switch (client.state) {
+          LinkState.connected => ('Engine connected', Colors.green),
+          LinkState.connecting => ('Connecting…', Colors.amber),
+          LinkState.disconnected => ('Engine disconnected, retrying', Colors.redAccent),
+        };
+        final active = client.downloads.where((d) => d.isActive).length;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.extension, size: 16, color: Colors.orange),
-              SizedBox(width: 8),
-              Text(
-                'Disconnected',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold, // Texto en negrita
-                  color: Colors.orange,
-                ),
-              ),
+              if (active > 0) Text('$active active', style: const TextStyle(fontSize: 12)),
+              const Spacer(),
+              Icon(Icons.circle, size: 8, color: color),
+              const SizedBox(width: 8),
+              Text(text, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.bold)),
             ],
           ),
-        ),
-      ],
+        );
+      },
     );
   }
 }
