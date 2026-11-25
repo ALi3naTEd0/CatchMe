@@ -8,15 +8,17 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fault is what faultServer does with one download request (not the probe).
 type fault struct {
-	status      int    // reply with this status instead of the file
-	retryAfter  string // Retry-After header to send with status
-	cutAfter    int    // send this many body bytes, then drop the connection
-	ignoreRange bool   // answer the whole file with 200
-	etag        string // pretend the file now has this ETag
+	status      int           // reply with this status instead of the file
+	retryAfter  string        // Retry-After header to send with status
+	cutAfter    int           // send this many body bytes, then drop the connection
+	ignoreRange bool          // answer the whole file with 200
+	etag        string        // pretend the file now has this ETag
+	delay       time.Duration // send the body in 4 KB pieces with this pause between them
 }
 
 // faultServer serves content with ranges like rangeServer, but asks decide
@@ -28,6 +30,7 @@ type faultServer struct {
 	requests    atomic.Int64
 	inFlight    atomic.Int64
 	maxInFlight atomic.Int64
+	bytesSent   atomic.Int64 // body bytes of download requests (not the probe)
 }
 
 func newFaultServer(t testing.TB, content []byte, etag string, decide func(n int64, r *http.Request) fault) *faultServer {
@@ -62,6 +65,10 @@ func newFaultServer(t testing.TB, content []byte, etag string, decide func(n int
 			if f.etag != "" {
 				currentETag = f.etag
 			}
+			w = &countWriter{ResponseWriter: w, n: &fs.bytesSent}
+			if f.delay > 0 {
+				w = &slowWriter{ResponseWriter: w, delay: f.delay, done: r.Context().Done()}
+			}
 			if f.cutAfter > 0 {
 				w = &cutWriter{ResponseWriter: w, left: f.cutAfter}
 			}
@@ -90,5 +97,49 @@ func (c *cutWriter) Write(b []byte) (int, error) {
 	c.left -= len(b)
 	return c.ResponseWriter.Write(b)
 }
+
+// countWriter adds every body byte it passes on to n.
+type countWriter struct {
+	http.ResponseWriter
+	n *atomic.Int64
+}
+
+func (c *countWriter) Write(b []byte) (int, error) {
+	n, err := c.ResponseWriter.Write(b)
+	c.n.Add(int64(n))
+	return n, err
+}
+
+func (c *countWriter) Flush() { c.ResponseWriter.(http.Flusher).Flush() }
+
+// slowWriter sends the body in 4 KB pieces with a pause after each one, and
+// stops as soon as the client goes away.
+type slowWriter struct {
+	http.ResponseWriter
+	delay time.Duration
+	done  <-chan struct{}
+}
+
+func (s *slowWriter) Write(b []byte) (int, error) {
+	written := 0
+	for len(b) > 0 {
+		piece := b[:min(len(b), 4096)]
+		n, err := s.ResponseWriter.Write(piece)
+		written += n
+		if err != nil {
+			return written, err
+		}
+		s.Flush()
+		b = b[n:]
+		select {
+		case <-time.After(s.delay):
+		case <-s.done:
+			return written, http.ErrAbortHandler
+		}
+	}
+	return written, nil
+}
+
+func (s *slowWriter) Flush() { s.ResponseWriter.(http.Flusher).Flush() }
 
 func ok(int64, *http.Request) fault { return fault{} }
