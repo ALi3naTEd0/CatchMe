@@ -23,7 +23,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: catchmed/go.mod
+          # Latest stable Go, so builds get standard library security fixes.
+          # go.mod only states the minimum version.
+          go-version: stable
           cache-dependency-path: catchmed/go.sum
       - run: go vet ./...
       - name: Tests with race detector and goroutine leak checks
@@ -43,7 +45,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: catchmed/go.mod
+          # Latest stable Go, so builds get standard library security fixes.
+          # go.mod only states the minimum version.
+          go-version: stable
           cache-dependency-path: catchmed/go.sum
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
@@ -63,13 +67,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: catchmed/go.mod
+          # Latest stable Go, so builds get standard library security fixes.
+          # go.mod only states the minimum version.
+          go-version: stable
           cache-dependency-path: catchmed/go.sum
       - name: Build the daemon the app tests start
         working-directory: catchmed
         run: go build -trimpath -o bin/catchmed ./cmd/catchmed
       - uses: subosito/flutter-action@v2
         with:
+          # Pinned to the version used in development so CI and local agree.
+          # Newer Flutter deprecates package:flutter/material.dart.
+          flutter-version: 3.47.2
           channel: stable
           cache: true
       - run: flutter pub get
