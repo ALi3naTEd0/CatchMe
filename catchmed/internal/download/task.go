@@ -1,0 +1,302 @@
+package download
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"math/rand/v2"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"time"
+
+	"golang.org/x/sync/errgroup"
+)
+
+// ErrUnsupportedURL is returned for anything that is not an http or https URL.
+var ErrUnsupportedURL = errors.New("download: only http and https URLs are supported")
+
+// Options tunes a Task. Zero fields take the defaults below.
+type Options struct {
+	MinPart    int64         // smallest range worth its own connection (8 MiB)
+	MaxParts   int           // parallel connections per download (8)
+	MaxRetries int           // failed attempts in a row before giving up on a range (5)
+	RetryBase  time.Duration // first wait between attempts, doubled each time (500 ms)
+	RetryMax   time.Duration // longest wait between attempts (15 s)
+}
+
+func (o Options) withDefaults() Options {
+	if o.MinPart <= 0 {
+		o.MinPart = 8 << 20
+	}
+	if o.MaxParts <= 0 {
+		o.MaxParts = 8
+	}
+	if o.MaxRetries <= 0 {
+		o.MaxRetries = 5
+	}
+	if o.RetryBase <= 0 {
+		o.RetryBase = 500 * time.Millisecond
+	}
+	if o.RetryMax <= 0 {
+		o.RetryMax = 15 * time.Second
+	}
+	return o
+}
+
+// Result describes a finished download.
+type Result struct {
+	Path   string // where the file ended up
+	Size   int64
+	SHA256 string // hex
+}
+
+// Task is one download from a URL into a directory. Create it with the
+// exported fields set, then call Run.
+type Task struct {
+	URL     string
+	Dir     string
+	Fetcher *Fetcher // nil uses a Fetcher with a 30 s idle timeout
+	Options Options
+
+	done  atomic.Int64 // bytes on disk so far
+	total atomic.Int64 // file size, -1 while unknown
+}
+
+// Progress returns the bytes downloaded so far and the total (-1 if unknown).
+// It is safe to call from any goroutine while Run is working.
+func (t *Task) Progress() (done, total int64) {
+	return t.done.Load(), t.total.Load()
+}
+
+// Run downloads the file and returns where it was saved. The file is written
+// as "<name>.part" and renamed only when complete and verified, so a crash or
+// cancel never leaves a file that looks finished but is not.
+func (t *Task) Run(ctx context.Context) (Result, error) {
+	if u, err := url.Parse(t.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return Result{}, fmt.Errorf("%w: %q", ErrUnsupportedURL, t.URL)
+	}
+	opts := t.Options.withDefaults()
+	f := t.Fetcher
+	if f == nil {
+		f = &Fetcher{IdleTimeout: 30 * time.Second}
+	}
+	t.total.Store(-1)
+
+	var info Info
+	err := retry(ctx, opts, func() (int64, error) {
+		var err error
+		info, err = f.Probe(ctx, t.URL)
+		return 0, err
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	t.total.Store(info.Size)
+
+	finalPath, part, err := reserve(t.Dir, info.Filename)
+	if err != nil {
+		return Result{}, err
+	}
+	partPath := part.Name()
+	defer part.Close()
+
+	if info.Ranges && info.Size > 0 {
+		err = t.fetchParallel(ctx, f, info, part, opts)
+		if errors.Is(err, ErrRangeNotSupported) {
+			// The server said it supports ranges and then ignored them: start
+			// over with a single stream instead of failing.
+			err = t.fetchSequential(ctx, f, info.URL, part, opts)
+		}
+	} else if info.Size != 0 {
+		err = t.fetchSequential(ctx, f, info.URL, part, opts)
+	}
+	if err != nil {
+		return Result{}, err // the .part file stays, ready for a resume
+	}
+
+	sum, size, err := finish(part, info.Size)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := os.Rename(partPath, finalPath); err != nil {
+		return Result{}, fmt.Errorf("download: %w", err)
+	}
+	return Result{Path: finalPath, Size: size, SHA256: sum}, nil
+}
+
+// fetchParallel splits the file into ranges and downloads up to MaxParts at
+// once into the preallocated part file. The first range that fails for good
+// cancels the others.
+func (t *Task) fetchParallel(ctx context.Context, f *Fetcher, info Info, part *os.File, opts Options) error {
+	if err := part.Truncate(info.Size); err != nil {
+		return fmt.Errorf("download: preallocate: %w", err)
+	}
+	ranges, err := Plan(info.Size, opts.MinPart, opts.MaxParts)
+	if err != nil {
+		return err
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(opts.MaxParts)
+	for _, r := range ranges {
+		g.Go(func() error {
+			next := r // what is still missing of this range
+			return retry(gctx, opts, func() (int64, error) {
+				n, err := f.FetchRange(gctx, info.URL, next, info.Validator, part, func(n int64) { t.done.Add(n) })
+				next.Start += n // resume after the bytes that did arrive
+				return n, err
+			})
+		})
+	}
+	return g.Wait()
+}
+
+// fetchSequential downloads the whole file in one stream. Without ranges
+// there is no way to resume, so every retry starts from byte zero.
+func (t *Task) fetchSequential(ctx context.Context, f *Fetcher, rawURL string, part *os.File, opts Options) error {
+	return retry(ctx, opts, func() (int64, error) {
+		if err := restart(part); err != nil {
+			return 0, err
+		}
+		t.done.Store(0)
+		n, err := f.FetchWhole(ctx, rawURL, part, func(n int64) { t.done.Add(n) })
+		if err == nil {
+			t.total.Store(n) // now the size is known even if the server never said
+		}
+		return 0, err // progress does not count: the next attempt starts over anyway
+	})
+}
+
+func restart(f *os.File) error {
+	if err := f.Truncate(0); err != nil {
+		return fmt.Errorf("download: %w", err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("download: %w", err)
+	}
+	return nil
+}
+
+// retry calls attempt until it succeeds, fails for good, or ctx ends. attempt
+// returns how many bytes it made progress; any progress resets the count of
+// failures, so a connection that keeps dropping but keeps advancing never
+// runs out of retries.
+func retry(ctx context.Context, opts Options, attempt func() (progress int64, err error)) error {
+	failures := 0
+	for {
+		n, err := attempt()
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return context.Cause(ctx) // canceled or paused: not a failure
+		}
+		if !retryable(err) {
+			return err
+		}
+		if n > 0 {
+			failures = 0
+		}
+		failures++
+		if failures > opts.MaxRetries {
+			return fmt.Errorf("download: giving up after %d attempts: %w", failures, err)
+		}
+		if err := sleep(ctx, backoff(opts, failures, err)); err != nil {
+			return err
+		}
+	}
+}
+
+// retryable separates errors that a later attempt can fix (network drops,
+// stalls, 5xx, 429) from those it cannot (404, 403, a changed file).
+func retryable(err error) bool {
+	var se *StatusError
+	if errors.As(err, &se) {
+		return se.Retryable()
+	}
+	switch {
+	case errors.Is(err, ErrRangeNotSupported), errors.Is(err, ErrRemoteChanged),
+		errors.Is(err, ErrUnsupportedURL), errors.Is(err, ErrInvalidSize):
+		return false
+	}
+	return true
+}
+
+// backoff doubles the wait on each failure up to RetryMax, with random
+// jitter so parallel ranges do not retry in lockstep. A server's Retry-After
+// wins when it asks for longer, up to two minutes.
+func backoff(opts Options, failures int, err error) time.Duration {
+	d := opts.RetryBase << min(failures-1, 20)
+	d = min(d, opts.RetryMax)
+	d = d/2 + rand.N(d/2+1) // between half and the full delay
+	var se *StatusError
+	if errors.As(err, &se) && se.RetryAfter > d {
+		d = min(se.RetryAfter, 2*time.Minute)
+	}
+	return d
+}
+
+func sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+// reserve picks a free name in dir ("movie.mkv", then "movie (1).mkv", ...)
+// and creates its .part file. O_EXCL makes the reservation atomic, so two
+// downloads of files with the same name never write to the same place.
+func reserve(dir, name string) (finalPath string, part *os.File, err error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", nil, fmt.Errorf("download: %w", err)
+	}
+	base, ext := splitExt(name)
+	for i := 0; i < 1000; i++ {
+		candidate := name
+		if i > 0 {
+			candidate = fmt.Sprintf("%s (%d)%s", base, i, ext)
+		}
+		finalPath = filepath.Join(dir, candidate)
+		if _, err := os.Lstat(finalPath); err == nil {
+			continue // a finished file already has this name
+		}
+		part, err = os.OpenFile(finalPath+".part", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, os.ErrExist) {
+			continue // another download is using this name
+		}
+		if err != nil {
+			return "", nil, fmt.Errorf("download: %w", err)
+		}
+		return finalPath, part, nil
+	}
+	return "", nil, fmt.Errorf("download: no free name for %q in %s", name, dir)
+}
+
+// finish flushes the part file to disk, checks its size and hashes it.
+// Ranges arrive out of order, so the hash needs one sequential pass at the end.
+func finish(part *os.File, wantSize int64) (sum string, size int64, err error) {
+	if err := part.Sync(); err != nil {
+		return "", 0, fmt.Errorf("download: %w", err)
+	}
+	if _, err := part.Seek(0, io.SeekStart); err != nil {
+		return "", 0, fmt.Errorf("download: %w", err)
+	}
+	h := sha256.New()
+	size, err = io.Copy(h, part)
+	if err != nil {
+		return "", 0, fmt.Errorf("download: hashing: %w", err)
+	}
+	if wantSize >= 0 && size != wantSize {
+		return "", 0, fmt.Errorf("download: got %d bytes, server announced %d", size, wantSize)
+	}
+	return hex.EncodeToString(h.Sum(nil)), size, nil
+}

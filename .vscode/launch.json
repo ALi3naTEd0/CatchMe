@@ -1,0 +1,26 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "catchmed (daemon)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/catchmed/cmd/catchmed"
+    },
+    {
+      "name": "Tests: paquete download (debug)",
+      "type": "go",
+      "request": "launch",
+      "mode": "test",
+      "program": "${workspaceFolder}/catchmed/internal/download",
+      "args": ["-test.v", "-test.count=1"]
+    },
+    {
+      "name": "CatchMe app (Flutter)",
+      "type": "dart",
+      "request": "launch",
+      "program": "lib/main.dart"
+    }
+  ]
+}

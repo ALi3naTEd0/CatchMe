@@ -1,0 +1,11 @@
+{
+  "go.testFlags": ["-race", "-count=1", "-v"],
+  "go.testTimeout": "120s",
+  "go.testExplorer.packageDisplayMode": "nested",
+  "go.toolsManagement.autoUpdate": true,
+  "[go]": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": { "source.organizeImports": "explicit" }
+  },
+  "files.exclude": { "**/.dart_tool": true, "**/build": true }
+}

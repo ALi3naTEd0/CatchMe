@@ -1,0 +1,7 @@
+go 1.26.0
+
+// Workspace so VS Code (gopls) sees both Go modules from the repo root.
+use (
+	./catchmed
+	./server
+)
