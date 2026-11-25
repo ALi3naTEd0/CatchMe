@@ -18,7 +18,7 @@ APP="$MNT/CatchMe.app"
 [[ -x "$APP/Contents/Resources/catchmed" ]] || { echo "FAIL: engine missing from the app"; exit 1; }
 lipo -archs "$APP/Contents/Resources/catchmed"
 
-CATCHME_SMOKE_FILE="$REPORT" "$APP/Contents/MacOS/catchme" >"$OUT/smoke-macos.log" 2>&1 &
+CATCHME_SMOKE_FILE="$REPORT" "$APP/Contents/MacOS/CatchMe" >"$OUT/smoke-macos.log" 2>&1 &
 PID=$!
 
 for _ in $(seq 1 60); do [[ -s "$REPORT" ]] && break; sleep 1; done

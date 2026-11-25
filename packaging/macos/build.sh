@@ -12,7 +12,7 @@ mkdir -p "$DIST"
 
 echo "== CatchMe $VERSION for macOS"
 flutter build macos --release --dart-define=CATCHME_VERSION="$VERSION"
-BUILT=build/macos/Build/Products/Release/catchme.app
+BUILT=build/macos/Build/Products/Release/CatchMe.app
 
 STAGE=build/dmg
 rm -rf "$STAGE"

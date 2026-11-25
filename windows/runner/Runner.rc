@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "catchme" "\0"
+            VALUE "FileDescription", "CatchMe" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "catchme" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2025 com.example. All rights reserved." "\0"
             VALUE "OriginalFilename", "catchme.exe" "\0"
-            VALUE "ProductName", "catchme" "\0"
+            VALUE "ProductName", "CatchMe" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

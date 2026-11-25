@@ -6,3 +6,4 @@ Exec=catchme
 Icon=catchme
 Categories=Network;FileTransfer;
 Terminal=false
+StartupWMClass=io.github.ali3nated0.CatchMe

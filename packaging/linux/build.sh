@@ -32,7 +32,7 @@ rm -rf "$APPDIR"
 cp -r "$BUNDLE" "$APPDIR"
 cp packaging/linux/AppRun "$APPDIR/AppRun"
 chmod +x "$APPDIR/AppRun"
-cp packaging/linux/catchme.desktop "$APPDIR/catchme.desktop"
+cp packaging/linux/io.github.ali3nated0.CatchMe.desktop "$APPDIR/"
 cp assets/app-icon.png "$APPDIR/catchme.png"
 
 TOOL=${APPIMAGETOOL:-build/tools/appimagetool-x86_64.AppImage}
