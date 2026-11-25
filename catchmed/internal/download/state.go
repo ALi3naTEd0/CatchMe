@@ -74,28 +74,34 @@ func (s State) check() error {
 // SaveState writes st to path atomically: a crash in the middle leaves the
 // previous state intact instead of a half-written JSON file.
 func SaveState(path string, st State) error {
-	b, err := json.MarshalIndent(st, "", "  ")
+	return writeJSON(path, st)
+}
+
+// writeJSON writes v as JSON through a temporary file, fsync and rename, so
+// readers see either the old content or the new one, never a mix.
+func writeJSON(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
 	if err != nil {
-		return fmt.Errorf("download: save state: %w", err)
+		return fmt.Errorf("download: save %s: %w", filepath.Base(path), err)
 	}
 	defer os.Remove(tmp.Name()) // no-op after a successful rename
 	if _, err := tmp.Write(b); err != nil {
 		tmp.Close()
-		return fmt.Errorf("download: save state: %w", err)
+		return fmt.Errorf("download: save %s: %w", filepath.Base(path), err)
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return fmt.Errorf("download: save state: %w", err)
+		return fmt.Errorf("download: save %s: %w", filepath.Base(path), err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("download: save state: %w", err)
+		return fmt.Errorf("download: save %s: %w", filepath.Base(path), err)
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
-		return fmt.Errorf("download: save state: %w", err)
+		return fmt.Errorf("download: save %s: %w", filepath.Base(path), err)
 	}
 	return nil
 }

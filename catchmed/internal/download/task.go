@@ -118,7 +118,7 @@ func (t *Task) Snapshot() State {
 // as "<name>.part" and renamed only when complete and verified, so a crash or
 // cancel never leaves a file that looks finished but is not.
 func (t *Task) Run(ctx context.Context) (Result, error) {
-	if u, err := url.Parse(t.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if !isHTTPURL(t.URL) {
 		return Result{}, fmt.Errorf("%w: %q", ErrUnsupportedURL, t.URL)
 	}
 	opts := t.Options.withDefaults()
@@ -348,6 +348,11 @@ func (t *Task) saveEvery(part *os.File, every time.Duration) (stop func()) {
 		close(quit)
 		<-exited
 	}
+}
+
+func isHTTPURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 func restart(f *os.File) error {
