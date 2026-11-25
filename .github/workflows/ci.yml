@@ -20,8 +20,8 @@ jobs:
       run:
         working-directory: catchmed
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           # Latest stable Go, so builds get standard library security fixes.
           # go.mod only states the minimum version.
@@ -42,8 +42,8 @@ jobs:
       run:
         working-directory: catchmed
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           # Latest stable Go, so builds get standard library security fixes.
           # go.mod only states the minimum version.
@@ -64,8 +64,8 @@ jobs:
     name: Flutter app
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           # Latest stable Go, so builds get standard library security fixes.
           # go.mod only states the minimum version.
